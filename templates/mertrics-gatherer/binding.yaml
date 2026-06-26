@@ -6,7 +6,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: metrics-gatherer
-    namespace: argocd
+    namespace: {{ .Release.Namespace }}
 roleRef:
   name: metrics-gatherer-token-creator
   kind: ClusterRole
@@ -19,7 +19,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: metrics-gatherer
-    namespace: argocd
+    namespace: {{ .Release.Namespace }}
 roleRef:
   name: metrics-gatherer-role
   kind: ClusterRole
@@ -32,7 +32,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: metrics-gatherer
-    namespace: argocd
+    namespace: {{ .Release.Namespace }}
 roleRef:
   name: node-metrics-reader
   kind: ClusterRole
@@ -45,7 +45,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: metrics-gatherer
-    namespace: argocd
+    namespace: {{ .Release.Namespace }}
 roleRef:
   name: metrics-gatherer-rhea-config-reader
   kind: Role

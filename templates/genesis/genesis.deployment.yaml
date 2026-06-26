@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: genesis
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
   labels:
    juno-innovations.com/service-deployment: "genesis"
   annotations:
@@ -91,3 +91,28 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.rhea.resources | nindent 12 }}
+        {{- if .Values.tls.enabled }}
+        - name: proxy
+          image: {{ .Values.proxy.image }}
+          imagePullPolicy: {{ .Values.pull_policy }}
+          ports:
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+        {{- end }}
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: genesis-proxy
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.certificate.secretName }}
+      {{- end }}

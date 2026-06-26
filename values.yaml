@@ -93,3 +93,29 @@ rhea:
       memory: 250Mi
 
 ingressClassName: nginx
+
+# WARP-private exposure (internal-cks). When enabled, the genesis Service is
+# labeled/annotated so the central warp-route-reconciler routes <hostname> to its
+# ClusterIP over the shared internal-cks Cloudflare Tunnel. Leave disabled to keep
+# the chart's upstream behavior unchanged.
+warp:
+  enabled: false
+  hostname: ""                                # e.g. juno.dev.conductor.technology
+
+# In-pod TLS-terminating reverse proxy (nginx). Required for WARP-private exposure
+# because Pattern B connects directly to the Service ClusterIP:port -- a single
+# port can't path-route, and the app needs / -> :3000 and /socket.io -> :8000
+# under one HTTPS origin. When enabled, the genesis Service exposes :443 and a
+# proxy sidecar is added to the genesis pod, fronted by a cert-manager cert.
+tls:
+  enabled: false
+  certificate:
+    # cert-manager issuer that satisfies the hostname (DNS-01 in CKS).
+    issuerRef:
+      name: letsencrypt-dns01-prod
+      kind: ClusterIssuer
+    # Secret cert-manager writes and the proxy mounts.
+    secretName: genesis-tls
+
+proxy:
+  image: nginx:1.27-alpine

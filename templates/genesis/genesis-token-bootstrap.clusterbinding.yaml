@@ -2,7 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: genesis-token-bootstrap
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
   annotations:
     argocd.argoproj.io/hook: PreSync
 roleRef:
@@ -12,4 +12,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: genesis-token-bootstrap
-    namespace: argocd
+    namespace: {{ .Release.Namespace }}

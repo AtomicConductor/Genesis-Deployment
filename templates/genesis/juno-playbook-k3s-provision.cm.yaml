@@ -4,7 +4,7 @@ metadata:
   labels:
     juno-innovations.com/ansible-playbook: juno-playbook-k3s-provision
   name: juno-playbook-k3s-provision
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
 data:
   ee-image: junoinnovations/ansible-ee:main
   playbook.yml: |

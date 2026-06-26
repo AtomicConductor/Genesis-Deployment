@@ -2,4 +2,4 @@ kind: ServiceAccount
 apiVersion: v1
 metadata:
   name: terra
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}

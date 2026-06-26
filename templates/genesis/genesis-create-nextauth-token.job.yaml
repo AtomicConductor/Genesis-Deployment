@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: genesis-create-nextauth-token
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
   annotations:
     argocd.argoproj.io/hook: PreSync
 {{- range $key, $value := .Values.genesis_token_creation_extra_annotations }}

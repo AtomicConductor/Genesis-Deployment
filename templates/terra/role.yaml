@@ -2,7 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: terra
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -18,7 +18,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: terra
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]

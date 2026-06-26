@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: metrics-gatherer
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
   labels:
     metrics: "enabled"
 spec:

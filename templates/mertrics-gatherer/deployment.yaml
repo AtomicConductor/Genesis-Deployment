@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: metrics-gatherer
-  namespace: argocd
+  namespace: {{ .Release.Namespace }}
   labels:
     juno-innovations.com/service-deployment: "metrics-gatherer"
 spec:

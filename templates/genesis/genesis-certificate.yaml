@@ -1,0 +1,14 @@
+{{- if .Values.tls.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: genesis-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Values.tls.certificate.secretName }}
+  dnsNames:
+    - {{ required "warp.hostname is required when tls.enabled" .Values.warp.hostname | quote }}
+  issuerRef:
+    name: {{ .Values.tls.certificate.issuerRef.name }}
+    kind: {{ .Values.tls.certificate.issuerRef.kind }}
+{{- end }}

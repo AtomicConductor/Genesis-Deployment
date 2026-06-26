@@ -1,0 +1,41 @@
+# Orion / Genesis -- dev (genesis-dev namespace, WARP-private, TLS).
+#
+# Deployed by the argocd-internal app-of-apps to the genesis-dev namespace.
+# Access is WARP-only at https://juno.dev.conductor.technology:
+#   * warp.enabled labels/annotates the genesis Service so the central
+#     warp-route-reconciler routes the hostname -> Service ClusterIP.
+#   * tls.enabled adds the nginx proxy sidecar (TLS on :443, path-routes
+#     / -> :3000 UI and /socket.io -> :8000 backend) fronted by a
+#     cert-manager cert from the shared letsencrypt-dns01-prod issuer.
+#
+# Still required OUTSIDE this chart before traffic flows (infra repo):
+#   * cilium-network-policies/values-dev.yaml: a devPolicies entry for
+#     genesis-dev allowing ingress fromEntities: cluster on :443 (+ egress
+#     the Orion services need: kube-apiserver, image pulls, DNS).
+#   * the genesis-dev namespace must carry the cks-netpol=cilium baseline label.
+
+host: ""                                      # unused: ingress is disabled when warp.enabled
+
+warp:
+  enabled: true
+  hostname: juno.dev.conductor.technology
+
+tls:
+  enabled: true
+  certificate:
+    issuerRef:
+      name: letsencrypt-dns01-prod
+      kind: ClusterIssuer
+    secretName: genesis-tls
+
+env:
+  NEXTAUTH_URL: https://juno.dev.conductor.technology
+  # NextAuth sits behind the in-pod nginx proxy; trust the X-Forwarded-* headers.
+  AUTH_TRUST_HOST: "true"
+
+titan:
+  # TODO(confirm): cluster owner identity for Titan. Placeholders below --
+  # replace with the real owner before this is considered production-dev ready.
+  owner: jlehrman
+  email: jlehrman@conductortech.com
+  uid: "1000"
