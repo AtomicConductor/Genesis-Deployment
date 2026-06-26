@@ -115,4 +115,8 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.tls.certificate.secretName }}
+            # Optional so the pod still starts before cert-manager issues the
+            # leaf (self-signed fallback until the real cert lands). See
+            # k8s-services-infra STANDARDS.md s6.
+            optional: true
       {{- end }}
