@@ -11,8 +11,8 @@ data:
     http {
       map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 
-      upstream genesis_ui      { server 127.0.0.1:3000; }
-      upstream genesis_backend { server 127.0.0.1:8000; }
+      upstream genesis_ui      { server 127.0.0.1:{{ .Values.ports.ui }}; }
+      upstream genesis_backend { server 127.0.0.1:{{ .Values.ports.backend }}; }
 
       server {
         listen 443 ssl;

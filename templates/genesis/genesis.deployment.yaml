@@ -48,11 +48,11 @@ spec:
               valueFrom:
                 secretKeyRef:
                   key: token
-                  name: juno-auth-secret
+                  name: {{ .Values.auth.secretName }}
             - name: GALAXY
-              value: "Milky Way"
+              value: {{ .Values.galaxy | quote }}
             - name: ICON
-              value: "/universe/assets/galaxy-1.webp"
+              value: {{ .Values.icon | quote }}
           {{- if .Values.image_pull_secret }}
             - name: IMAGE_PULL_SECRET
               value: {{ .Values.image_pull_secret }}
@@ -62,9 +62,9 @@ spec:
               value: {{ $value }}
           {{- end }}
           ports:
-            - containerPort: 3000
+            - containerPort: {{ .Values.ports.ui }}
               name: frontend
-            - containerPort: 8000
+            - containerPort: {{ .Values.ports.backend }}
               name: backend
         - name: rhea
           image: "{{ .Values.rhea.image.registry }}/{{ .Values.rhea.image.repository }}:{{ .Values.rhea.image.tag }}"
