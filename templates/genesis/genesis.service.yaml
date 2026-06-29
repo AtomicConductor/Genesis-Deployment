@@ -19,11 +19,11 @@ spec:
       protocol: TCP
       name: https
     {{- end }}
-    - port: 3000
-      targetPort: 3000
+    - port: {{ .Values.ports.ui }}
+      targetPort: {{ .Values.ports.ui }}
       protocol: TCP
       name: frontend
-    - port: 8000
-      targetPort: 8000
+    - port: {{ .Values.ports.backend }}
+      targetPort: {{ .Values.ports.backend }}
       protocol: TCP
       name: backend

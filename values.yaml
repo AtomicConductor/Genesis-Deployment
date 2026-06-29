@@ -15,6 +15,23 @@ node_selector:                              # Node selector to deploy the Genesi
 extra_annotations: {}
 genesis_token_creation_extra_annotations: {}
 
+# Name of the NextAuth secret the genesis server reads the token from. Created by
+# the genesis-create-nextauth-token PreSync Job (image: /create-nextauth-secret),
+# which writes this fixed name -- only change if the image is built to honor it.
+auth:
+  secretName: juno-auth-secret
+
+# Genesis branding env, passed straight to the genesis container.
+galaxy: "Milky Way"
+icon: "/universe/assets/galaxy-1.webp"
+
+# Genesis container ports. These must match what the genesis image binds
+# internally (UI 3000, backend 8000); they are wired through the Service, the
+# in-pod nginx proxy, and the ingress, so changing one value updates all of them.
+ports:
+  ui: 3000
+  backend: 8000
+
 
 # https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
 # If you run powerful controlplane nodes, you can reuse them to host core Orion services.

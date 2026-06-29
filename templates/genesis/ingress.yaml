@@ -5,7 +5,7 @@ metadata:
   name: genesis-ingress
   namespace: {{ .Release.Namespace }}
   annotations:
-    nginx.ingress.kubernetes.io/auth-url: "http://genesis.{{ .Release.Namespace }}.svc.cluster.local:3000/api/socket-auth/"
+    nginx.ingress.kubernetes.io/auth-url: "http://genesis.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ports.ui }}/api/socket-auth/"
 spec:
   ingressClassName: {{ .Values.ingressClassName }}
   rules:
@@ -18,12 +18,12 @@ spec:
               service:
                 name: genesis
                 port:
-                  number: 3000
+                  number: {{ .Values.ports.ui }}
           - path: "/socket.io"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: genesis
                 port:
-                  number: 8000
+                  number: {{ .Values.ports.backend }}
 {{- end }}
