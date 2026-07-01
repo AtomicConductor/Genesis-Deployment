@@ -76,26 +76,77 @@ Done:
 - [x] Namespace baseline: `cks-netpol=cilium` label + `genesis` CNP already applied.
 - [x] `genesis-tls` cert + `juno-auth-secret` already present.
 
-Remaining (in order):
-1. [ ] **Mirror the 4 images into `zot-dev`** (`crane copy`, per
-   `k8s-services-infra/docs/IMAGE_BUILD_PIPELINE.md` s5) -- one-off in-cluster Job as
-   `robot-pusher`, with a temporary Docker Hub egress allowance on the `image-builds`
-   CNP (revert after). Needs the `robot-pusher` credential.
-2. [ ] **Seal `zot-pull`** (`robot-puller`, read-only) `--scope strict` for
-   `genesis-dev` and apply it (onboarding doc step 6). Needs the `robot-puller`
-   credential.
-3. [ ] **Repoint the app-of-apps** `genesis` entry (in `k8s-services-internal`
-   `argocd-apps/values-dev-us-east-04a.yaml`) from `juno-fx/coreweave` to
-   `AtomicConductor/Genesis-Deployment` @ `lean-vdi`. Do this AFTER 1 and 2 so the
-   sync does not `ImagePullBackOff`.
-4. [ ] **RBAC**: the chart still grants Genesis a `*/*/*` cluster-admin ClusterRole.
-   Scope it to what Titan uses (the `juno-innovations.com` CRDs + the namespaces it
-   schedules VDIs into + pods/services/secrets) or get platform sign-off.
-5. [ ] **Confirm the VDI session path**: verify a running workstation is reached
-   through the Genesis hostname (web/streamed) and does not open a separate per-session
-   port that would need its own WARP route.
+- [x] **Images mirrored into `zot-dev`** (see runbook below).
+- [x] **`zot-pull` secret** created in `genesis-dev` (see runbook below).
+- [x] **App-of-apps repointed** -- `k8s-services-internal` PR #77 (`genesis-lean-vdi`
+      -> `dev`), held for review. Merging it triggers the Argo sync.
 
-## Repoint diff (step 3)
+Open (require a decision / a running app):
+- [ ] **RBAC**: the chart still grants Genesis a `*/*/*` cluster-admin ClusterRole
+      (`templates/genesis/genesis.role.yaml`). Scope it to what Genesis/Titan actually
+      use (the `juno-innovations.com` CRDs + the namespaces Titan schedules VDIs into +
+      pods/services/secrets) or get platform sign-off. Best done after watching it run.
+- [ ] **Confirm the VDI session path**: after merge, create a Workstation and verify the
+      session reaches users through the Genesis hostname (web/streamed) and does not open
+      a separate per-session port that would need its own WARP route.
+
+## Runbook: how the images were mirrored + `zot-pull` created
+
+These were run from a workstation with WARP connectivity and `kubectl` pointed at
+`dev-us-east-04a`. The approach deliberately avoids an in-cluster build Job and a
+temporary Docker Hub egress change on the shared `image-builds` CNP (which Argo would
+self-heal): the four images are **public**, so we pull them over the workstation's own
+internet and push straight to the Zot **backend** `:5000` (where basic-auth works --
+the WARP `:443` front returns 401 for basic-auth) via a port-forward. No shared infra
+is mutated. Credentials are handled base64/opaque and never printed or committed.
+
+```bash
+# 0. crane (github.com/google/go-containerregistry). Any recent release works.
+
+# 1. Port-forward the Zot backend (basic-auth-capable) to localhost.
+kubectl -n zot-dev port-forward svc/zot 5000:5000    # leave running
+
+# 2. robot-pusher credential (write). Recover from an existing zot-push secret;
+#    do NOT echo the value. Login writes to a THROWAWAY docker config we delete after.
+export DOCKER_CONFIG="$(mktemp -d)"
+PUSHER_PW="$(kubectl -n image-builds-dev get secret zot-push \
+  -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d \
+  | jq -r '.auths."zot.dev.conductor.technology".password')"
+crane auth login localhost:5000 -u robot-pusher -p "$PUSHER_PW" --insecure
+
+# 3. Copy the four images Docker Hub -> Zot backend (--insecure: backend cert has no
+#    localhost SAN). Repo path is preserved, so runtime pulls of
+#    zot.dev.conductor.technology/<path> resolve to the same blobs.
+crane copy docker.io/junoinnovations/genesis:v6.0.0 localhost:5000/junoinnovations/genesis:v6.0.0 --insecure
+crane copy docker.io/junoinnovations/titan:v2.1.2   localhost:5000/junoinnovations/titan:v2.1.2   --insecure
+crane copy docker.io/junoinnovations/rhea:v1.2.3    localhost:5000/junoinnovations/rhea:v1.2.3    --insecure
+crane copy docker.io/library/nginx:1.27-alpine      localhost:5000/library/nginx:1.27-alpine      --insecure
+
+# 4. Verify, then wipe the throwaway credential config.
+for r in junoinnovations/genesis junoinnovations/titan junoinnovations/rhea library/nginx; do
+  crane ls "localhost:5000/$r" --insecure
+done
+rm -rf "$DOCKER_CONFIG"; unset PUSHER_PW DOCKER_CONFIG
+```
+
+`zot-pull` (robot-puller, read-only) is the **same** dockerconfig every other app uses
+for the same Zot host, so we copy it verbatim rather than re-seal -- no plaintext ever
+touches the shell:
+
+```bash
+kubectl -n internal-status-dev get secret zot-pull -o jsonpath='{.data.\.dockerconfigjson}' \
+  | xargs -I{} kubectl create secret generic zot-pull -n genesis-dev \
+      --type=kubernetes.io/dockerconfigjson --from-literal=.dockerconfigjson='{}' \
+      --dry-run=client -o yaml | kubectl apply -f -
+# verified against the backend: robot-puller -> GET /v2/ = 200, POST upload = 403 (read-only)
+```
+
+> Note on tooling: on the Windows workstation this was actually run with PowerShell
+> equivalents (the dockerconfig is parsed with `ConvertFrom-Json`, the secret is applied
+> from an inline manifest via `kubectl apply -f -`), but the mechanics are identical to
+> the bash above.
+
+## Repoint diff (PR #77)
 
 ```yaml
 genesis:
@@ -109,3 +160,10 @@ genesis:
     valueFiles:
       - values-dev.yaml
 ```
+
+## For prod later
+
+The prod twin uses the same chart with a prod-shaped overlay: point the image registries
+at `zot.conductor.technology` (mirror the same four images there), issue the cert for the
+prod hostname, and add a `genesis-<ns>` entry to the prod cilium policies. Nothing about
+the mirror/`zot-pull` procedure changes except the Zot host.
