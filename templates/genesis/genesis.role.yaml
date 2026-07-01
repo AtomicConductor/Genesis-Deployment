@@ -1,9 +1,12 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: genesis
   namespace: {{ .Release.Namespace }}
 rules:
+  # Full control, but confined to the release namespace (genesis-dev in dev).
+  # Orion runs in single-namespace mode (rhea NAMESPACED=true), so Genesis never
+  # needs cluster-wide reach.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["*"]

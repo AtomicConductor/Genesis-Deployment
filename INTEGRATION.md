@@ -81,11 +81,17 @@ Done:
 - [x] **App-of-apps repointed** -- `k8s-services-internal` PR #77 (`genesis-lean-vdi`
       -> `dev`), held for review. Merging it triggers the Argo sync.
 
-Open (require a decision / a running app):
-- [ ] **RBAC**: the chart still grants Genesis a `*/*/*` cluster-admin ClusterRole
-      (`templates/genesis/genesis.role.yaml`). Scope it to what Genesis/Titan actually
-      use (the `juno-innovations.com` CRDs + the namespaces Titan schedules VDIs into +
-      pods/services/secrets) or get platform sign-off. Best done after watching it run.
+Done:
+- [x] **RBAC scoped to the release namespace.** Genesis's `*/*/*` cluster-admin
+      `ClusterRole`/`ClusterRoleBinding`, the `genesis-token-bootstrap` cluster RBAC, and
+      Titan's `ClusterRole`/`ClusterRoleBinding` are all now namespaced `Role`/`RoleBinding`
+      bound in `{{ .Release.Namespace }}` (genesis-dev). Genesis keeps full control but only
+      inside its own namespace (matches Orion's single-namespace mode, rhea `NAMESPACED=true`).
+      The one dropped capability is Titan self-creating CRDs (cluster-scoped) -- the chart /
+      Argo owns the `juno-innovations.com` CRDs instead. If a feature needs a cluster-scoped
+      read (e.g. node/GPU listing in the UI), add a narrow read-only `ClusterRole` back.
+
+Open (require a running app):
 - [ ] **Confirm the VDI session path**: after merge, create a Workstation and verify the
       session reaches users through the Genesis hostname (web/streamed) and does not open
       a separate per-session port that would need its own WARP route.
