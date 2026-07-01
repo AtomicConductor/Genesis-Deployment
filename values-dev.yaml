@@ -65,10 +65,16 @@ basicAuth:
 titan:
   image:
     registry: zot.dev.conductor.technology/junoinnovations
-  # TODO(confirm): cluster owner identity for Titan. Placeholders below --
-  # replace with the real owner before this is considered production-dev ready.
-  owner: jlehrman
-  email: jlehrman@conductortech.com
+  # Cluster owner identity. Titan bootstraps this as a User CRD (metadata.name ==
+  # owner) and makes it a member of the "admin" Group at startup -- this is how the
+  # sign-in identity gets an authorized backing User (rhea maps the logged-in
+  # principal to a User named after the email local-part). MUST stay in sync with
+  # basicAuth.email above: owner == local-part(basicAuth.email), i.e.
+  # "admin" == local-part("admin@conductor.technology"). Otherwise rhea logs
+  # "could not find user: <local-part>" and every genesis/titan call fails with
+  # "Internal <service> Error". See INTEGRATION.md "sign-in + authorization".
+  owner: admin
+  email: admin@conductor.technology
   uid: "1000"
 
 rhea:

@@ -1,4 +1,4 @@
-﻿# Orion / Genesis -- Conductor lean-VDI integration
+# Orion / Genesis -- Conductor lean-VDI integration
 
 How we run **only** Orion's Linux-VDI workstation engine as a tenant on the existing
 Conductor CKS cluster (`dev-us-east-04a`), WARP-private, with **no** second Argo CD,
@@ -290,20 +290,39 @@ We use `basic_auth`, wired via `values-dev.yaml -> basicAuth` (toggle in `values
 The password is **not** in git -- it lives in the `genesis-basic-auth` Secret
 (key `password`), created out of band with kubectl create secret generic.
 
-**2. Authorization -- map the identity to an admin.** `files/rhea/user-policies.cedar`
-grants `principal in Group::"admin"` full access. Rhea maps the signed-in email to a
-`User.juno-innovations.com` by `spec.email`, then checks its `Group` membership. A
-fresh tenant only has the CoreWeave owner `jlehrman` (`jlehrman@coreweave.com`) in
-`admin`, so any other login is denied. Create a matching User
-(`kind: User`, `apiVersion: juno-innovations.com/v2`, `spec.email` = the login email,
-`spec.active: true`, a unique `spec.uid`) and add its `metadata.name` to the `admin`
-Group's `spec.members`.
+**2. Authorization -- give the sign-in identity a backing admin User.**
+`files/rhea/user-policies.cedar` grants `principal in Group::"admin"` full access.
+The critical, non-obvious detail: **Rhea keys the User by `metadata.name`, and derives
+that name from the email _local-part_ (before `@`) -- NOT from `spec.email`.** So a
+login of `admin@conductor.technology` is looked up as `User/admin`; if no User is named
+`admin`, rhea logs `could not find user: admin` and **every** genesis/titan call the UI
+makes fails with `Internal <service> Error` (surfaced as the "Error Details" panel).
+(This is why an earlier `User/conductor-admin` with the right `spec.email` still failed
+-- the *name* did not match the local-part.)
 
-> Rhea caches users/groups at pod start, so after creating users out-of-band you must
-> **restart the genesis pod** (`kubectl -n genesis-dev delete pod -l app=genesis`) for
-> the change to take effect. Normally users/groups are managed from the Genesis UI once
-> an admin can log in. These CRs are `scope: Cluster` and were created imperatively (not
-> in git); move them into GitOps if they must survive a cluster rebuild.
+**The durable, GitOps way to create that User is Titan's owner.** At startup Titan
+reconciles a `User` named `ORION_OWNER` (email `ORION_EMAIL`, uid `ORION_OWNER_UID`) and
+adds it to the `admin` Group -- exactly how `jlehrman` exists. So we set, in
+`values-dev.yaml`:
+
+```yaml
+titan:
+  owner: admin                     # == local-part(basicAuth.email); becomes User/admin
+  email: admin@conductor.technology
+  uid: "1000"
+basicAuth:
+  email: admin@conductor.technology
+```
+
+`titan.owner` **must** equal `local-part(basicAuth.email)`. With this in git a fresh
+deploy self-heals the admin User + group membership; no imperative kubectl. (Verified:
+setting `ORION_OWNER=<name>` makes Titan create `User/<name>` via its OpenAPI client and
+append it to `Group/admin.spec.members`.)
+
+> Rhea caches users/groups at pod start. Titan writes the owner User on its own startup,
+> but if you create/rename users out of band you must **restart the genesis pod**
+> (`kubectl -n genesis-dev delete pod -l app=genesis`) so rhea reloads its entity cache.
+> Additional users are normally managed from the Genesis UI once an admin can log in.
 
 ## Gotchas & lessons learned
 
