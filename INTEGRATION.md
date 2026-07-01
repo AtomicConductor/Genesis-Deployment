@@ -369,11 +369,24 @@ sign-in page is empty.
 
 **Rhea / cedar authorization.** Cedar entity types are namespaced by the platform
 namespace (`argocd::Service::"genesis"` in `system-policies.cedar`) -- another place the
-"argocd" assumption surfaces, though for service principals it did not block us. User
-identity is matched by `User.spec.email`; admin is `Group::"admin"` membership
-(`permit(principal in Group::"admin", ...)`); `*/home/` is wide-open in policy. Rhea
-caches users/groups at pod start -- restart the pod after any out-of-band User/Group
-change.
+"argocd" assumption surfaces, though for service principals it did not block us. Admin is
+`Group::"admin"` membership (`permit(principal in Group::"admin", ...)`); `*/home/` is
+wide-open in policy. Rhea caches users/groups at pod start -- restart the genesis pod
+after any out-of-band User/Group change.
+
+**Rhea keys Users by `metadata.name` (the email local-part), NOT `spec.email` -- this is
+the trap behind the "Error Details" panel.** A login of `admin@conductor.technology` is
+resolved to `User/admin`. If the backing User is named anything else (we first made
+`User/conductor-admin`, correct `spec.email`, wrong name), the genesis pod's own rhea
+sidecar logs `could not find user: admin` and rejects **every** authorized call the UI
+makes -- surfacing as `Internal titan Error` / `Internal genesis Error` with
+`status_code: undefined` for users, groups, projects, and nodes (all of them, not just
+one service). Diagnose from `kubectl -n genesis-dev logs deploy/genesis -c rhea`. The
+durable fix is declarative, not a hand-made User: set `titan.owner` =
+`local-part(basicAuth.email)`, because Titan reconciles `User/<owner>` and adds it to
+`Group/admin` at startup (verified: `ORION_OWNER=btest9` made Titan create `User/btest9`
+via its OpenAPI client and append it to `admin`). Argo self-heals any live `kubectl set
+env`/annotation, so this only sticks from git.
 
 **RBAC: Orion is not namespaced.** Its CRDs (groups/users/workstations/workstation-logs)
 are `scope: Cluster`, and Genesis makes cluster-wide read calls at startup
