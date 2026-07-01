@@ -1,8 +1,10 @@
-# Orion's CRDs (groups/users/workstations/workstation-logs) are cluster-scoped, so
-# Genesis and Titan need cluster-level access to THOSE resources specifically -- and
-# nothing else. This is the entire cluster-scoped RBAC footprint of the deployment
-# (a tiny, resource-scoped ClusterRole -- not cluster-admin). Name is namespace-prefixed
-# so multiple releases on one cluster don't collide.
+# Cluster-scoped access Genesis/Titan genuinely need (Orion is not fully namespaced):
+#   * its own CRDs (groups/users/workstations/workstation-logs) are scope: Cluster
+#   * Genesis discovers workloads cluster-wide at startup (list services/pods/...).
+# This grants full control of the Orion CRDs + READ-ONLY on common resources cluster
+# wide -- NOT cluster-admin: no cluster-wide writes to core resources and no cluster
+# wide secret access (Genesis writes only within its own namespace, via its Role).
+# Name is namespace-prefixed so multiple releases on one cluster don't collide.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -15,3 +17,10 @@ rules:
   - apiGroups: ["junovfx.com"]
     resources: ["groups", "users"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Genesis/Titan discover workloads cluster-wide at startup -- read-only.
+  - apiGroups: [""]
+    resources: ["services", "pods", "namespaces", "endpoints", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
