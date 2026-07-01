@@ -27,6 +27,12 @@ image_pull_secret: zot-pull
 
 image:
   registry: zot.dev.conductor.technology/junoinnovations
+  # Namespace-parametrized rebuild of upstream genesis:v6.0.0. Upstream ships the
+  # backend as a PyInstaller binary that hardcodes the "argocd" namespace for its
+  # schema-cache/workload-template calls; -ns1 runs it un-frozen with a shim that
+  # redirects that namespace to GENESIS_NAMESPACE (this release's namespace). See
+  # INTEGRATION.md "Runbook: namespace-parametrized genesis image".
+  tag: v6.0.0-ns1
 
 warp:
   enabled: true
