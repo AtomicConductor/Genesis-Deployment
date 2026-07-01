@@ -107,6 +107,10 @@ Done:
       license mode** (2 workstations) until a real `juno-license` is supplied.
 
 Open (require a running app):
+- [ ] **Titan rhea 403 on `/titan/users` + `/titan/groups`** (User/Group mgmt + the
+      per-page group verification). Auth now reaches titan (frontend namespace fixed),
+      but the service-call principal is not authorized even under a wide-open policy --
+      see the "Rhea / cedar authorization" gotcha. Blocks admin UX; login + home work.
 - [ ] **Confirm the VDI session path**: create a Workstation and verify the session reaches
       users through the Genesis hostname (web/streamed) and does not open a separate
       per-session port that would need its own WARP route.
@@ -369,10 +373,42 @@ sign-in page is empty.
 
 **Rhea / cedar authorization.** Cedar entity types are namespaced by the platform
 namespace (`argocd::Service::"genesis"` in `system-policies.cedar`) -- another place the
-"argocd" assumption surfaces, though for service principals it did not block us. Admin is
+"argocd" assumption surfaces, and -- contrary to what this note used to say -- it DOES block service-to-service calls once traffic reaches a service (see the two gotchas below). Admin is
 `Group::"admin"` membership (`permit(principal in Group::"admin", ...)`); `*/home/` is
 wide-open in policy. Rhea caches users/groups at pod start -- restart the genesis pod
 after any out-of-band User/Group change.
+
+**Frontend service namespace was also hardcoded `argocd` -- the real cause of the "Error
+Details" panel that persisted after the User-lookup fix.** Separate from the rhea
+User-lookup above: the Node frontend builds its in-cluster service URLs as
+`<svc>.<namespace>.svc.cluster.local` and bakes `namespace:"argocd"` into its service
+config (`/prod/.next/server/chunks/1909.js` and `4734.js`). In `genesis-dev`,
+`titan.argocd.svc` / `genesis.argocd.svc` do not resolve (`wget: bad address`), so every
+server action failed with `status_code: undefined` / `Internal <service> Error` and the
+panel stayed at 9 -- the calls never left the pod, so titan/rhea logs showed nothing. The
+frontend does **not** read `GENESIS_NAMESPACE`, so we rewrite the baked string at container
+start: the genesis container entrypoint is wrapped (chart `command`/`args`) to run
+`sed -i 's/namespace:"argocd"/namespace:"$GENESIS_NAMESPACE"/g'` over the built JS, then
+`exec sh /prod/launch-prod.sh`. This is the frontend analog of the backend `ns_patch` shim;
+no image rebuild (commit `98a121b`). After it, calls reach `titan.genesis-dev.svc` (401/403
+instead of a DNS failure) -- which then exposed the rhea 403 below.
+
+> **UNRESOLVED (as of this writing): titan rhea 403 on service calls.** With the frontend
+> reaching titan, its rhea sidecar returns **403 `RHEA_AUTHZ: Authorization denied`** for
+> `GET /titan/users` and `/titan/groups`, so User/Group management and the per-page "verify
+> group" check fail (login + home still work via the `*/home/` wide-open rule). This is
+> **not** cedar policy matching: replacing *both* `orion-systempolicy` and `orion-userpolicy`
+> with an unconditional `permit(principal, action, resource)` (rhea hot-reloads policy
+> ConfigMaps in ~1s) does **not** clear it -- so the *principal itself* is not being
+> established from the token the frontend mints for the service call (an identity problem
+> upstream of policy). `NAMESPACED=true` makes rhea build entities as `<namespace>::Type`,
+> but our namespace `genesis-dev` has a hyphen -- an illegal cedar identifier
+> (`parser error ... "dev": want ::`) -- so a namespaced policy for our namespace cannot even
+> be written; rhea's default cedar namespace is the literal `argocd` (seen in the binary next
+> to the `:13000` default), matching upstream's install-into-`argocd` convention. Diagnose
+> from `kubectl -n genesis-dev logs deploy/titan -c titan` (`RHEA_AUTHZ` lines) and `-c rhea`.
+> `LOG_LEVEL`/`DEBUG`/`RHEA_LOG_LEVEL` env do not raise rhea's level (stays INFO), so the
+> decision internals are not visible yet.
 
 **Rhea keys Users by `metadata.name` (the email local-part), NOT `spec.email` -- this is
 the trap behind the "Error Details" panel.** A login of `admin@conductor.technology` is
