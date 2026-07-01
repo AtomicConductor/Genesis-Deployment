@@ -32,7 +32,7 @@ image:
   # schema-cache/workload-template calls; -ns1 runs it un-frozen with a shim that
   # redirects that namespace to GENESIS_NAMESPACE (this release's namespace). See
   # INTEGRATION.md "Runbook: namespace-parametrized genesis image".
-  tag: v6.0.0-ns1
+  tag: v6.0.0-ns2
 
 warp:
   enabled: true
