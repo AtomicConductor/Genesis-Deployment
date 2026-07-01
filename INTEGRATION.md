@@ -305,6 +305,71 @@ Group's `spec.members`.
 > an admin can log in. These CRs are `scope: Cluster` and were created imperatively (not
 > in git); move them into GitOps if they must survive a cluster rebuild.
 
+## Gotchas & lessons learned
+
+Hard-won, non-obvious things from bringing this up. Read before touching the image,
+auth, or RBAC.
+
+**The Genesis backend is a closed PyInstaller binary.** No public source; the
+`argocd` namespace and other behavior are baked in. Mirroring the upstream image with
+crane does NOT give you editable source -- you have to extract the frozen bundle and
+run it un-frozen (see the image runbook). `GENESIS_NAMESPACE` does not affect the
+schema-cache lookup; only the `ns_patch.py` shim does.
+
+**Alpine 3.24.1, but `apk add python3` = Python 3.14, not 3.12.** The genesis image
+and `python:3.12-alpine` are both Alpine 3.24.1, yet the distro's `python3` package is
+3.14 -- incompatible with the extracted musl CPython-3.12 `.so` (you get
+`bad magic number`). Only `python:3.12-alpine` (Python built from source in
+`/usr/local`) gives a matching 3.12 interpreter. Copy Node from the genesis image into
+`python:3.12-alpine`, not the other way around.
+
+**PyInstaller extraction layout is split.** `pyinstxtractor-ng` puts pure-Python
+`.pyc` under `PYZ.pyz_extracted/` and compiled `.so` in top-level package dirs. You
+must merge them into one tree or imports like `pydantic_core._pydantic_core` fail. The
+backend also reads data files by absolute build-time path (`/app/src/static`,
+`/app/src/backend/header/juno-ascii.txt`) that are NOT in the PyInstaller archive --
+upstream ships them on the filesystem, so copy the whole `/app/src` from the image.
+
+**Docker Desktop on Windows can't reach a host port-forward as `localhost`.** The
+daemon runs in a VM, so `docker login/push localhost:5000` (a kubectl port-forward on
+the host) times out. Use `crane` on the host (it hits `127.0.0.1:5000` directly):
+`docker save img -o t.tar; crane push t.tar <ref> --insecure`. Build with
+`--provenance=false --sbom=false` so you push a single image, not an attestation index.
+
+**Next.js standalone binds to `$HOSTNAME`.** Kubernetes sets `HOSTNAME` to the pod
+name (-> pod IP), so the frontend listens only there and the in-pod nginx TLS sidecar
+(`proxy_pass 127.0.0.1:3000`) returns `502`. Launch node with `HOSTNAME=0.0.0.0`.
+Upstream never hit this because it fronts the pod with an Ingress to the pod IP.
+
+**NextAuth quirks.** `/api/auth/*` 308-redirects to add a trailing slash (the app sets
+`trailingSlash: true`); a POST that does not follow 308 silently no-ops. The
+`basic_auth` credentials provider expects a SINGLE `formData` field whose value is JSON
+`{"input":"<email>","password":"<pw>"}` -- not separate `email`/`password` fields.
+Providers are opt-in: with no provider env set, `/api/auth/providers` is `{}` and the
+sign-in page is empty.
+
+**Rhea / cedar authorization.** Cedar entity types are namespaced by the platform
+namespace (`argocd::Service::"genesis"` in `system-policies.cedar`) -- another place the
+"argocd" assumption surfaces, though for service principals it did not block us. User
+identity is matched by `User.spec.email`; admin is `Group::"admin"` membership
+(`permit(principal in Group::"admin", ...)`); `*/home/` is wide-open in policy. Rhea
+caches users/groups at pod start -- restart the pod after any out-of-band User/Group
+change.
+
+**RBAC: Orion is not namespaced.** Its CRDs (groups/users/workstations/workstation-logs)
+are `scope: Cluster`, and Genesis makes cluster-wide read calls at startup
+(services across all namespaces, nodes, storageclasses, persistentvolumes,
+customresourcedefinitions). Namespaced Roles cannot cover these, so a narrow read-only
+ClusterRole is required -- but full cluster-admin is not.
+
+**Licensing.** With no `juno-license` secret the backend logs `402: Failed to fetch
+license token` and drops to **community mode** (2 workstations). That is enough to test
+VDI; supply a real license for more.
+
+**Operational.** The local working tree drifted to a stale version of tracked files at
+one point while the committed branch and the live cluster were correct. Trust
+`git show HEAD:<file>` and `kubectl get` over a local file read when they disagree.
+
 ## For prod later
 
 The prod twin uses the same chart with a prod-shaped overlay: point the image registries
