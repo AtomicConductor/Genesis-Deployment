@@ -55,6 +55,13 @@ env:
   # NextAuth sits behind the in-pod nginx proxy; trust the X-Forwarded-* headers.
   AUTH_TRUST_HOST: "true"
 
+# Email+password sign-in. Password lives in the genesis-basic-auth Secret (key:
+# password), created out-of-band (NOT in git) -- see INTEGRATION.md.
+basicAuth:
+  enabled: true
+  email: admin@conductor.technology
+  passwordSecret: genesis-basic-auth
+
 titan:
   image:
     registry: zot.dev.conductor.technology/junoinnovations

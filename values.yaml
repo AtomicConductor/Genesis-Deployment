@@ -6,6 +6,10 @@ image_pull_secret:                          # Image pull secret to use for the p
 host:                                       # Hostname to use for the Genesis ingress
 pull_policy: Always                         # Pull policy to use for the Genesis image
 env: {}                                     # Environment variables to set for the Genesis server
+basicAuth:                                  # NextAuth "basic_auth" (email+password) sign-in provider
+  enabled: false                            # When true, requires <passwordSecret> with key "password"
+  email: ""                                 # Login email (non-secret)
+  passwordSecret: genesis-basic-auth        # Secret (key: password) holding the login password
 node_selector:                              # Node selector to deploy the Genesis server to
   enable: true                              # Enable node selector
   labels:                                   # Node selector to deploy the Genesis server to
