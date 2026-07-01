@@ -107,10 +107,15 @@ Done:
       license mode** (2 workstations) until a real `juno-license` is supplied.
 
 Open (require a running app):
-- [ ] **Titan rhea 403 on `/titan/users` + `/titan/groups`** (User/Group mgmt + the
-      per-page group verification). Auth now reaches titan (frontend namespace fixed),
-      but the service-call principal is not authorized even under a wide-open policy --
-      see the "Rhea / cedar authorization" gotcha. Blocks admin UX; login + home work.
+- [x] **Titan rhea 403 on `/titan/users` + `/titan/groups`** -- RESOLVED. The service
+      principal WAS established (`principal.serviceAccountName == "genesis"`); the only miss
+      was the shipped `resource == argocd::Service::"..."` scope, unmatchable in our
+      namespace. Fixed by gating `system-policies.cedar` on the trusted serviceAccount set
+      instead of the (unexpressible) resource entity -- User/Group mgmt now returns 200.
+- [ ] **License status endpoint 500** (`GET /genesis/license/status`). Separate from rhea:
+      the backend calls `list_config_map_for_all_namespaces` (cluster-scoped) and our
+      namespace-scoped RBAC returns a Kubernetes API `403`. Not needed for VDI; would need
+      either a cluster-wide read grant or a backend patch to scope the list.
 - [ ] **Confirm the VDI session path**: create a Workstation and verify the session reaches
       users through the Genesis hostname (web/streamed) and does not open a separate
       per-session port that would need its own WARP route.
@@ -393,22 +398,36 @@ start: the genesis container entrypoint is wrapped (chart `command`/`args`) to r
 no image rebuild (commit `98a121b`). After it, calls reach `titan.genesis-dev.svc` (401/403
 instead of a DNS failure) -- which then exposed the rhea 403 below.
 
-> **UNRESOLVED (as of this writing): titan rhea 403 on service calls.** With the frontend
-> reaching titan, its rhea sidecar returns **403 `RHEA_AUTHZ: Authorization denied`** for
-> `GET /titan/users` and `/titan/groups`, so User/Group management and the per-page "verify
-> group" check fail (login + home still work via the `*/home/` wide-open rule). This is
-> **not** cedar policy matching: replacing *both* `orion-systempolicy` and `orion-userpolicy`
-> with an unconditional `permit(principal, action, resource)` (rhea hot-reloads policy
-> ConfigMaps in ~1s) does **not** clear it -- so the *principal itself* is not being
-> established from the token the frontend mints for the service call (an identity problem
-> upstream of policy). `NAMESPACED=true` makes rhea build entities as `<namespace>::Type`,
-> but our namespace `genesis-dev` has a hyphen -- an illegal cedar identifier
-> (`parser error ... "dev": want ::`) -- so a namespaced policy for our namespace cannot even
-> be written; rhea's default cedar namespace is the literal `argocd` (seen in the binary next
-> to the `:13000` default), matching upstream's install-into-`argocd` convention. Diagnose
-> from `kubectl -n genesis-dev logs deploy/titan -c titan` (`RHEA_AUTHZ` lines) and `-c rhea`.
-> `LOG_LEVEL`/`DEBUG`/`RHEA_LOG_LEVEL` env do not raise rhea's level (stays INFO), so the
-> decision internals are not visible yet.
+> **RESOLVED: titan rhea 403 was the shipped `argocd::Service` resource scope, not identity.**
+> With the frontend reaching titan, its rhea sidecar returned **403 `RHEA_AUTHZ:
+> Authorization denied`** for `GET /titan/users` and `/titan/groups` (login + home still
+> worked via the `*/home/` wide-open rule). The earlier suspicion that the *principal* was
+> unestablished was a **false lead: Argo self-heal was silently reverting the live policy
+> mid-test** -- every `orion-systempolicy`/`orion-userpolicy` edit (including the
+> "unconditional permit" probe) was rolled back within a sync cycle, so the 403 never
+> reflected the policy under test. After pausing `automated.selfHeal` on the `genesis` app
+> **and** its parent app-of-apps (`k8s-services-internal-dev-us-east-04a`), the edits stuck
+> and the picture was unambiguous:
+>
+> - `resource == argocd::Service::"titan"` (shipped)                     -> **403**
+> - `resource == Service::"titan"` (bare)                                -> **403**
+> - no resource constraint, gated on `principal.serviceAccountName`      -> **200**
+>
+> So the principal IS established correctly (rhea sets `serviceAccountName` from the caller's
+> projected SA token). The only miss is the resource entity: `NAMESPACED=true` makes rhea
+> build it as `<namespace>::Service::"titan"` = `genesis-dev::Service::"titan"`, which never
+> equals the shipped `argocd::Service::"titan"` (upstream's install-into-`argocd` convention)
+> and cannot be written back into policy either -- `genesis-dev` has a hyphen, an illegal
+> cedar identifier (`parser error ... "dev": want ::`). **Fix:** gate `system-policies.cedar`
+> on the trusted `serviceAccountName` set (the same accounts the per-service rules
+> enumerated) and drop the unexpressible `resource ==` scope. Verified: `/titan/users` +
+> `/titan/groups` return 200 and the User/Group UI renders. This keeps `NAMESPACED=true`, so
+> user/group (`Group::"admin"`) auth is unchanged. Diagnose from `kubectl -n genesis-dev logs
+> deploy/titan -c titan` (`RHEA_AUTHZ` lines).
+>
+> **Operational note:** live policy/env experiments are meaningless while Argo self-heal is
+> on -- it reverts `kubectl` drift within a sync cycle. Pause `automated.selfHeal` on the app
+> *and every parent app-of-apps* first, then restore it when done.
 
 **Rhea keys Users by `metadata.name` (the email local-part), NOT `spec.email` -- this is
 the trap behind the "Error Details" panel.** A login of `admin@conductor.technology` is
