@@ -17,11 +17,3 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "watch", "list"]
-  # legacy CRs
-  - apiGroups: ["junovfx.com"]
-    resources: ["groups", "users"]
-    verbs: ["list", "create", "delete", "get", "patch", "update"]
-  # target CRs
-  - apiGroups: ["juno-innovations.com"]
-    resources: ["groups", "users"]
-    verbs: ["list", "create", "delete", "get", "patch", "update"]

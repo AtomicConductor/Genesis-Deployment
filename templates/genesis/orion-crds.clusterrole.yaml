@@ -1,0 +1,17 @@
+# Orion's CRDs (groups/users/workstations/workstation-logs) are cluster-scoped, so
+# Genesis and Titan need cluster-level access to THOSE resources specifically -- and
+# nothing else. This is the entire cluster-scoped RBAC footprint of the deployment
+# (a tiny, resource-scoped ClusterRole -- not cluster-admin). Name is namespace-prefixed
+# so multiple releases on one cluster don't collide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-orion-crds
+rules:
+  - apiGroups: ["juno-innovations.com"]
+    resources: ["groups", "users", "workstations", "workstation-logs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # legacy CRD group (kept until upstream drops it)
+  - apiGroups: ["junovfx.com"]
+    resources: ["groups", "users"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
