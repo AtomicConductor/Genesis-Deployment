@@ -18,8 +18,15 @@ rules:
     resources: ["groups", "users"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Genesis/Titan discover workloads cluster-wide at startup -- read-only.
+  # configmaps is REQUIRED: the compiled Genesis backend's workloads/license
+  # discovery calls list_config_map_for_all_namespaces (cluster-scoped). E.g.
+  # GET /genesis/license/status -> workloads/service.py:workloads() -> list
+  # configmaps across all namespaces. Without this grant that call returns a k8s
+  # 403 ("configmaps is forbidden ... at the cluster scope") which the backend
+  # surfaces as a 500 -- the red "View N Errors" badge in the UI. Read-only:
+  # Genesis can only enumerate configmaps, never mutate them (and never secrets).
   - apiGroups: [""]
-    resources: ["services", "pods", "namespaces", "endpoints", "nodes", "persistentvolumeclaims", "persistentvolumes"]
+    resources: ["services", "pods", "namespaces", "endpoints", "nodes", "persistentvolumeclaims", "persistentvolumes", "configmaps"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]

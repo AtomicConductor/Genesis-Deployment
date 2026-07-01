@@ -96,6 +96,9 @@ Done:
       "How workstations actually launch" + "Lean Helios workstations" below. The Helios
       desktop image is mirrored into Zot and rendered as a plain Deployment + TLS sidecar +
       WARP-routed Service (`templates/workstations/*`), exposed exactly like genesis.
+- [x] **License-status 500 ("View N Errors" badge) fixed via a read-only `configmaps`
+      grant.** See "License-status 500" below. `genesis-dev-orion-crds` ClusterRole now
+      allows cluster-wide read of configmaps (never write, never secrets).
 
 Open (require a running app):
 - [ ] **Confirm the Selkies WebRTC media path over WARP.** The desktop web UI + signaling
@@ -153,6 +156,26 @@ already allowed: the `genesis` CiliumNetworkPolicy selects the whole namespace
 (`endpointSelector: {}`, `ingress fromEntities: cluster`), so workstation pods on :443 are
 reachable from the WARP tunnel with no extra netpol. Dev ships one workstation,
 `vdi.dev.conductor.technology` (`gpu:false`).
+
+## License-status 500 (the red "View N Errors" badge)
+
+After auth worked, the dashboard showed a red **"View N Errors"** badge. One of those
+errors is `GET /genesis/license/status` returning **500**. It is **not** a real license
+problem and **not** a WARP/DNS problem -- it's a missing Kubernetes RBAC verb:
+
+- The compiled Genesis backend's license/workloads discovery calls the Kubernetes
+  `list_config_map_for_all_namespaces` API (**cluster-scoped**, all namespaces), the same
+  way it lists services/pods/PVs at startup.
+- Our RBAC was deliberately scoped and read-only and simply didn't list `configmaps`, so
+  the API returned `configmaps is forbidden: User "system:serviceaccount:genesis-dev:genesis"
+  cannot list resource "configmaps" in API group "" at the cluster scope`. The backend
+  turns that 403 into a 500, which the UI aggregates into the error badge.
+
+**Fix (durable, GitOps):** add `configmaps` to the existing read-only `[""]` rule in
+`templates/genesis/orion-crds.clusterrole.yaml`. It stays **read-only** (`get/list/watch`
+only) and the binding is unchanged, so Genesis can *enumerate* configmaps cluster-wide but
+can never mutate them, and it still has **no** cluster-wide secret access. This matches the
+other cluster-scoped read grants Genesis already needs (services/pods/PVs/storageclasses/CRDs).
 
 ## Runbook: how the images were mirrored + `zot-pull` created
 
