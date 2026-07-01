@@ -60,10 +60,15 @@ Images (all four repointed at Zot in `values-dev.yaml`):
 
 | Component | Source (Docker Hub) | Zot target |
 |---|---|---|
-| genesis | `junoinnovations/genesis:v6.0.0` | `zot.dev.conductor.technology/junoinnovations/genesis:v6.0.0` |
+| genesis | `junoinnovations/genesis:v6.0.0` (rebuilt, see below) | `zot.dev.conductor.technology/junoinnovations/genesis:v6.0.0-ns4` |
 | titan | `junoinnovations/titan:v2.1.2` | `.../junoinnovations/titan:v2.1.2` |
 | rhea | `junoinnovations/rhea:v1.2.3` | `.../junoinnovations/rhea:v1.2.3` |
 | proxy | `nginx:1.27-alpine` | `zot.dev.conductor.technology/library/nginx:1.27-alpine` |
+
+The **genesis** image is a local rebuild of upstream `v6.0.0` (`v6.0.0-ns4`) that
+fixes a hardcoded namespace and makes the frontend work behind the TLS sidecar --
+see "Runbook: namespace-parametrized genesis image" below. `v6.0.0` (unmodified)
+is also mirrored in Zot.
 
 `values-dev.yaml` sets `image_pull_secret: zot-pull`, `warp.enabled: true`,
 `tls.enabled: true`, and the NextAuth env.
@@ -81,20 +86,32 @@ Done:
 - [x] **App-of-apps repointed** -- `k8s-services-internal` PR #77 (`genesis-lean-vdi`
       -> `dev`), held for review. Merging it triggers the Argo sync.
 
-Done:
-- [x] **RBAC scoped to the release namespace.** Genesis's `*/*/*` cluster-admin
-      `ClusterRole`/`ClusterRoleBinding`, the `genesis-token-bootstrap` cluster RBAC, and
-      Titan's `ClusterRole`/`ClusterRoleBinding` are all now namespaced `Role`/`RoleBinding`
-      bound in `{{ .Release.Namespace }}` (genesis-dev). Genesis keeps full control but only
-      inside its own namespace (matches Orion's single-namespace mode, rhea `NAMESPACED=true`).
-      The one dropped capability is Titan self-creating CRDs (cluster-scoped) -- the chart /
-      Argo owns the `juno-innovations.com` CRDs instead. If a feature needs a cluster-scoped
-      read (e.g. node/GPU listing in the UI), add a narrow read-only `ClusterRole` back.
+- [x] **RBAC scoped to the release namespace, plus one narrow read-only ClusterRole.**
+      Genesis's `*/*/*` cluster-admin `ClusterRole`/`ClusterRoleBinding`, the
+      `genesis-token-bootstrap` cluster RBAC, and Titan's `ClusterRole`/`ClusterRoleBinding`
+      are all now namespaced `Role`/`RoleBinding` bound in `{{ .Release.Namespace }}`
+      (genesis-dev) -- full control, but only inside its own namespace. Orion's own CRDs are
+      `scope: Cluster`, and Genesis/Titan genuinely need a few cluster-scoped **reads** at
+      startup, so `templates/genesis/orion-crds.clusterrole.yaml` grants exactly:
+      CRUD on the Orion CRDs (`juno-innovations.com` / `junovfx.com`
+      groups/users/workstations/workstation-logs) + **read-only** (`get/list/watch`) on
+      `services,pods,namespaces,endpoints,nodes,persistentvolumeclaims,persistentvolumes`,
+      `apps/{deployments,replicasets,statefulsets}`, `storage.k8s.io/storageclasses`, and
+      `apiextensions.k8s.io/customresourcedefinitions`. This is **not** cluster-admin: no
+      cluster-wide writes and no cluster-wide secret access. Name is namespace-prefixed
+      (`genesis-dev-orion-crds`) so multiple releases don't collide.
+- [x] **Genesis backend deployed and healthy.** Startup completes
+      (`Namespace: genesis-dev`, all schema/template/mount/storageclass caches refreshed,
+      all watchers started, `Uvicorn running on 0.0.0.0:8000`), the frontend serves through
+      the TLS sidecar (`GET / -> 308 /home`), Argo app `Synced`/`Healthy`. Runs in **community
+      license mode** (2 workstations) until a real `juno-license` is supplied.
 
 Open (require a running app):
-- [ ] **Confirm the VDI session path**: after merge, create a Workstation and verify the
-      session reaches users through the Genesis hostname (web/streamed) and does not open
-      a separate per-session port that would need its own WARP route.
+- [ ] **Confirm the VDI session path**: create a Workstation and verify the session reaches
+      users through the Genesis hostname (web/streamed) and does not open a separate
+      per-session port that would need its own WARP route.
+- [ ] **Real license** if more than 2 concurrent workstations are needed (currently community
+      mode: `Failed to load the license: 402` -> `Shifting to community mode`).
 
 ## Runbook: how the images were mirrored + `zot-pull` created
 
@@ -151,6 +168,95 @@ kubectl -n internal-status-dev get secret zot-pull -o jsonpath='{.data.\.dockerc
 > equivalents (the dockerconfig is parsed with `ConvertFrom-Json`, the secret is applied
 > from an inline manifest via `kubectl apply -f -`), but the mechanics are identical to
 > the bash above.
+
+## Runbook: namespace-parametrized genesis image (`v6.0.0-ns4`)
+
+### Why upstream `v6.0.0` can't be used as-is
+
+Upstream ships the Genesis **backend** as a PyInstaller-frozen onefile binary
+(`/src.app`) with **no public source**. Two things break a non-`argocd` tenant:
+
+1. **Hardcoded namespace.** `backend/workloads/service.py` (`Config.schemas`,
+   `templates`, `_create/_update/_delete_workload_template`) passes a literal
+   `namespace="argocd"` to the Kubernetes API for its schema-cache configmaps and
+   workload-template CRs. Upstream's Makefile installs Genesis *into* a namespace
+   named `argocd`, so the literal is never a problem for them. For us it caused a
+   crash loop: `configmaps is forbidden ... in the namespace "argocd"`. It is **not**
+   env-configurable (`GENESIS_NAMESPACE` only affects other components).
+2. **Frontend binds to `$HOSTNAME`.** The Next.js standalone `server.js` binds to
+   `process.env.HOSTNAME`, which Kubernetes sets to the pod name (-> pod IP). That
+   leaves nothing on loopback, but our nginx TLS sidecar proxies to `127.0.0.1:3000`
+   -> `502 Bad Gateway`. (Upstream fronts the pod with an Ingress to the pod IP, so
+   they never hit this.)
+
+### The fix (no decompilation, no bytecode surgery)
+
+Run the backend **un-frozen** under stock CPython 3.12 (musl) and inject a tiny
+runtime shim; copy the frontend verbatim and bind it to `0.0.0.0`.
+
+- `ns_patch.py` -- wraps `ApiClient.call_api` on **both** the sync `kubernetes` and
+  async `kubernetes_asyncio` clients. Any namespaced call whose `namespace == "argocd"`
+  is redirected to the platform namespace, resolved from `$GENESIS_PLATFORM_NAMESPACE`
+  -> `$GENESIS_NAMESPACE` -> the pod's service-account namespace -> `"argocd"`
+  (unchanged fallback). Only the exact value `"argocd"` is rewritten, so
+  per-user/project namespaces are untouched. This covers all five call sites at once.
+- `run_backend.py` -- replacement entry point: puts the bundle on `sys.path`, imports
+  `ns_patch` (applying it) **before** `from backend import app`, then runs the same
+  `uvicorn.run(app, host="0.0.0.0", workers=1)` the frozen `__main__` did.
+- `launch-prod.sh` -- runs the unchanged `node server.js` with `HOSTNAME=0.0.0.0`
+  and our `python3.12 run_backend.py`.
+
+Because the backend reads some data files by **absolute** build-time path
+(`/app/src/static` swagger theme, `/app/src/backend/header/juno-ascii.txt`, ...),
+the whole upstream `/app/src` tree is copied in for those assets. The `.py` there is
+**not** on `sys.path` (imports resolve to the un-frozen bundle at `/app`).
+
+`GENESIS_NAMESPACE` is already wired to `{{ .Release.Namespace }}` in
+`genesis.deployment.yaml`, so the shim needs no extra config -- the same image works
+in any namespace (dev/prod).
+
+### Reproduce (Windows workstation; bash equivalents are obvious)
+
+```powershell
+# 0. tools: Docker Desktop, crane. Both base images are Alpine 3.24.1, so the
+#    extracted musl CPython-3.12 .so and the copied Node binary are ABI-compatible.
+
+# 1. Extract the frozen backend from the upstream image.
+docker pull junoinnovations/genesis:v6.0.0
+docker create --name g junoinnovations/genesis:v6.0.0
+docker cp g:/src.app ./src.app; docker cp g:/prod/launch-prod.sh ./; docker rm g
+docker run --rm -v "${PWD}:/work" -w /work python:3.12 sh -c `
+  "pip install -q pyinstxtractor-ng && python -m pyinstxtractor_ng src.app"
+
+# 2. Merge the split layout into one importable tree: pyinstxtractor puts pure-python
+#    .pyc under PYZ.pyz_extracted/ and the .so in top-level package dirs.
+docker run --rm -v "${PWD}:/work" python:3.12-alpine sh -c `
+  "cp -r /work/src.app_extracted /work/app && `
+   cp -r /work/src.app_extracted/PYZ.pyz_extracted/* /work/app/ && `
+   rm -rf /work/app/PYZ.pyz_extracted"
+
+# 3. Add ns_patch.py, run_backend.py, launch-prod.sh, Dockerfile (in this folder),
+#    then build. --provenance=false keeps it a single pushable image.
+docker buildx build --provenance=false --sbom=false --load -t genesis-lean:v6.0.0-ns4 .
+
+# 4. Push to the Zot backend (same port-forward + robot-pusher as the mirror runbook).
+kubectl -n zot-dev port-forward svc/zot 5000:5000   # leave running
+$pw = (kubectl -n image-builds-dev get secret zot-push -o jsonpath='{.data.\.dockerconfigjson}' `
+  | %{ [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) } | ConvertFrom-Json `
+  ).auths.'zot.dev.conductor.technology'.password
+crane auth login localhost:5000 -u robot-pusher -p $pw --insecure
+docker save genesis-lean:v6.0.0-ns4 -o g.tar
+crane push g.tar localhost:5000/junoinnovations/genesis:v6.0.0-ns4 --insecure
+crane auth logout localhost:5000; Remove-Item g.tar
+```
+
+Then bump `image.tag` in `values-dev.yaml` and let Argo sync.
+
+The build inputs (`Dockerfile`, `ns_patch.py`, `run_backend.py`, `launch-prod.sh`,
+`.dockerignore`) are committed under **`image/`** in this repo. They are the whole
+source of truth for the rebuild; the large extracted bundle (`app/`, `src.app`,
+`src.app_extracted`) is regenerated by steps 1-2 above and is intentionally **not**
+committed. Copy `image/*` next to the generated `app/` to build.
 
 ## Repoint diff (PR #77)
 
