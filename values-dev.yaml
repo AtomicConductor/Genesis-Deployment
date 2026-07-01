@@ -8,13 +8,25 @@
 #     / -> :3000 UI and /socket.io -> :8000 backend) fronted by a
 #     cert-manager cert from the shared letsencrypt-dns01-prod issuer.
 #
+# Images are pulled from the internal Zot registry (zot.dev.conductor.technology),
+# mirrored from junoinnovations/* and library/nginx -- the CKS nodes have no
+# Docker Hub egress. See k8s-services-infra/docs/IMAGE_BUILD_PIPELINE.md s5.
+#
 # Still required OUTSIDE this chart before traffic flows (infra repo):
 #   * cilium-network-policies/values-dev.yaml: a devPolicies entry for
 #     genesis-dev allowing ingress fromEntities: cluster on :443 (+ egress
 #     the Orion services need: kube-apiserver, image pulls, DNS).
 #   * the genesis-dev namespace must carry the cks-netpol=cilium baseline label.
+#   * a zot-pull (robot-puller) dockerconfig SealedSecret in genesis-dev.
+#   * the juno-auth-secret Secret (key: token) in genesis-dev for NextAuth.
 
 host: ""                                      # unused: ingress is disabled when warp.enabled
+
+# Pull all images from the internal Zot (no Docker Hub egress on the CKS nodes).
+image_pull_secret: zot-pull
+
+image:
+  registry: zot.dev.conductor.technology/junoinnovations
 
 warp:
   enabled: true
@@ -28,14 +40,24 @@ tls:
       kind: ClusterIssuer
     secretName: genesis-tls
 
+# nginx proxy sidecar image, mirrored into Zot's library path.
+proxy:
+  image: zot.dev.conductor.technology/library/nginx:1.27-alpine
+
 env:
   NEXTAUTH_URL: https://juno.dev.conductor.technology
   # NextAuth sits behind the in-pod nginx proxy; trust the X-Forwarded-* headers.
   AUTH_TRUST_HOST: "true"
 
 titan:
+  image:
+    registry: zot.dev.conductor.technology/junoinnovations
   # TODO(confirm): cluster owner identity for Titan. Placeholders below --
   # replace with the real owner before this is considered production-dev ready.
   owner: jlehrman
   email: jlehrman@conductortech.com
   uid: "1000"
+
+rhea:
+  image:
+    registry: zot.dev.conductor.technology/junoinnovations
