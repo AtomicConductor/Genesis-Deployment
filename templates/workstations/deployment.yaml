@@ -1,0 +1,97 @@
+{{- range .Values.workstations }}
+{{- $tlsSecret := printf "helios-%s-tls" .name }}
+{{- if and .tls .tls.secretName }}{{ $tlsSecret = .tls.secretName }}{{- end }}
+# Helios Linux-VDI workstation "{{ .name }}" -- a GPU-capable Selkies WebRTC desktop.
+# Lean/GitOps: Titan/Terra/Genesis-marketplace are NOT in this path; the workstation
+# is a plain Deployment + TLS sidecar, exposed WARP-only via its Service. Helios needs
+# USER/UID/GID to create the desktop user (see files/helios init-user); UID must be
+# free in the image (1000 is taken upstream).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helios-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: helios-{{ .name }}
+    juno-innovations.com/workstation: {{ .name | quote }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 0
+  selector:
+    matchLabels:
+      app: helios-{{ .name }}
+  template:
+    metadata:
+      labels:
+        app: helios-{{ .name }}
+    spec:
+      {{- if $.Values.image_pull_secret }}
+      imagePullSecrets:
+        - name: {{ $.Values.image_pull_secret }}
+      {{- end }}
+      containers:
+        - name: helios
+          image: "{{ .image.registry }}/{{ .image.repository }}:{{ .image.tag }}"
+          imagePullPolicy: {{ $.Values.pull_policy }}
+          env:
+            - name: USER
+              value: {{ .user | quote }}
+            - name: UID
+              value: {{ .uid | quote }}
+            - name: GID
+              value: {{ .gid | quote }}
+            {{- if .password }}
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .password.secret }}
+                  key: {{ .password.key | default "password" }}
+            {{- end }}
+            {{- range .env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          ports:
+            - containerPort: 3000
+              name: web
+          resources:
+            requests:
+              cpu: {{ .resources.requests.cpu | quote }}
+              memory: {{ .resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .resources.limits.cpu | quote }}
+              memory: {{ .resources.limits.memory | quote }}
+              {{- if .gpu }}
+              nvidia.com/gpu: "1"
+              {{- end }}
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+        - name: proxy
+          image: {{ $.Values.proxy.image }}
+          imagePullPolicy: {{ $.Values.pull_policy }}
+          ports:
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: proxy-config
+          configMap:
+            name: helios-workstation-proxy
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecret }}
+            optional: true
+---
+{{- end }}

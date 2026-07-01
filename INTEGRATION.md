@@ -60,15 +60,10 @@ Images (all four repointed at Zot in `values-dev.yaml`):
 
 | Component | Source (Docker Hub) | Zot target |
 |---|---|---|
-| genesis | `junoinnovations/genesis:v6.0.0` (rebuilt, see below) | `zot.dev.conductor.technology/junoinnovations/genesis:v6.0.0-ns4` |
+| genesis | `junoinnovations/genesis:v6.0.0` | `zot.dev.conductor.technology/junoinnovations/genesis:v6.0.0` |
 | titan | `junoinnovations/titan:v2.1.2` | `.../junoinnovations/titan:v2.1.2` |
 | rhea | `junoinnovations/rhea:v1.2.3` | `.../junoinnovations/rhea:v1.2.3` |
 | proxy | `nginx:1.27-alpine` | `zot.dev.conductor.technology/library/nginx:1.27-alpine` |
-
-The **genesis** image is a local rebuild of upstream `v6.0.0` (`v6.0.0-ns4`) that
-fixes a hardcoded namespace and makes the frontend work behind the TLS sidecar --
-see "Runbook: namespace-parametrized genesis image" below. `v6.0.0` (unmodified)
-is also mirrored in Zot.
 
 `values-dev.yaml` sets `image_pull_secret: zot-pull`, `warp.enabled: true`,
 `tls.enabled: true`, and the NextAuth env.
@@ -86,41 +81,78 @@ Done:
 - [x] **App-of-apps repointed** -- `k8s-services-internal` PR #77 (`genesis-lean-vdi`
       -> `dev`), held for review. Merging it triggers the Argo sync.
 
-- [x] **RBAC scoped to the release namespace, plus one narrow read-only ClusterRole.**
-      Genesis's `*/*/*` cluster-admin `ClusterRole`/`ClusterRoleBinding`, the
-      `genesis-token-bootstrap` cluster RBAC, and Titan's `ClusterRole`/`ClusterRoleBinding`
-      are all now namespaced `Role`/`RoleBinding` bound in `{{ .Release.Namespace }}`
-      (genesis-dev) -- full control, but only inside its own namespace. Orion's own CRDs are
-      `scope: Cluster`, and Genesis/Titan genuinely need a few cluster-scoped **reads** at
-      startup, so `templates/genesis/orion-crds.clusterrole.yaml` grants exactly:
-      CRUD on the Orion CRDs (`juno-innovations.com` / `junovfx.com`
-      groups/users/workstations/workstation-logs) + **read-only** (`get/list/watch`) on
-      `services,pods,namespaces,endpoints,nodes,persistentvolumeclaims,persistentvolumes`,
-      `apps/{deployments,replicasets,statefulsets}`, `storage.k8s.io/storageclasses`, and
-      `apiextensions.k8s.io/customresourcedefinitions`. This is **not** cluster-admin: no
-      cluster-wide writes and no cluster-wide secret access. Name is namespace-prefixed
-      (`genesis-dev-orion-crds`) so multiple releases don't collide.
-- [x] **Genesis backend deployed and healthy.** Startup completes
-      (`Namespace: genesis-dev`, all schema/template/mount/storageclass caches refreshed,
-      all watchers started, `Uvicorn running on 0.0.0.0:8000`), the frontend serves through
-      the TLS sidecar (`GET / -> 308 /home`), Argo app `Synced`/`Healthy`. Runs in **community
-      license mode** (2 workstations) until a real `juno-license` is supplied.
+Done:
+- [x] **RBAC scoped to the release namespace.** Genesis's `*/*/*` cluster-admin
+      `ClusterRole`/`ClusterRoleBinding`, the `genesis-token-bootstrap` cluster RBAC, and
+      Titan's `ClusterRole`/`ClusterRoleBinding` are all now namespaced `Role`/`RoleBinding`
+      bound in `{{ .Release.Namespace }}` (genesis-dev). Genesis keeps full control but only
+      inside its own namespace (matches Orion's single-namespace mode, rhea `NAMESPACED=true`).
+      The one dropped capability is Titan self-creating CRDs (cluster-scoped) -- the chart /
+      Argo owns the `juno-innovations.com` CRDs instead. If a feature needs a cluster-scoped
+      read (e.g. node/GPU listing in the UI), add a narrow read-only `ClusterRole` back.
+
+Done:
+- [x] **VDI workstations delivered lean (no Titan/Terra/marketplace).** See
+      "How workstations actually launch" + "Lean Helios workstations" below. The Helios
+      desktop image is mirrored into Zot and rendered as a plain Deployment + TLS sidecar +
+      WARP-routed Service (`templates/workstations/*`), exposed exactly like genesis.
 
 Open (require a running app):
-- [x] **Titan rhea 403 on `/titan/users` + `/titan/groups`** -- RESOLVED. The service
-      principal WAS established (`principal.serviceAccountName == "genesis"`); the only miss
-      was the shipped `resource == argocd::Service::"..."` scope, unmatchable in our
-      namespace. Fixed by gating `system-policies.cedar` on the trusted serviceAccount set
-      instead of the (unexpressible) resource entity -- User/Group mgmt now returns 200.
-- [ ] **License status endpoint 500** (`GET /genesis/license/status`). Separate from rhea:
-      the backend calls `list_config_map_for_all_namespaces` (cluster-scoped) and our
-      namespace-scoped RBAC returns a Kubernetes API `403`. Not needed for VDI; would need
-      either a cluster-wide read grant or a backend patch to scope the list.
-- [ ] **Confirm the VDI session path**: create a Workstation and verify the session reaches
-      users through the Genesis hostname (web/streamed) and does not open a separate
-      per-session port that would need its own WARP route.
-- [ ] **Real license** if more than 2 concurrent workstations are needed (currently community
-      mode: `Failed to load the license: 402` -> `Shifting to community mode`).
+- [ ] **Confirm the Selkies WebRTC media path over WARP.** The desktop web UI + signaling
+      is websocket (works like genesis's socket.io over the tunnel); confirm the WebRTC
+      video actually streams to the browser over the WARP L3 route, or switch Selkies to
+      its websocket transport / add a TURN relay if ICE can't establish.
+- [ ] **GPU**: the two L40 nodes are currently 16/16 consumed by CoreWeave HPC
+      node-health-check pods, so `gpu:true` workstations Pend until a GPU frees. The dev
+      workstation ships `gpu:false` (software render) for now.
+
+## How workstations actually launch (corrects the earlier TL;DR)
+
+The earlier note "Genesis UI -> Workstation CR -> **Titan** reconciles -> Titan spawns the
+GPU pod" is **wrong**. Verified against the running app:
+
+- **Titan is an identity API only** (`Titan API Server`, uvicorn :8000): its OpenAPI
+  exposes `/titan/users|user|groups|group|identity|state` and **no** workstation/pod
+  endpoints. It never creates workloads. (`Workstation`/`workstation-logs` CRDs exist but
+  nothing in the lean set reconciles them.)
+- **The Genesis "Create Workload" UI is backed by Argo CD "workload applications."** With
+  the catalog empty, `GET /genesis/workload/schemas` and `/catalog` return `200 []`, the
+  Create-Workload "Version" dropdown is empty, and **Refresh** throws
+  `backend/workloads/refresh.py: 404 No workload applications found`. Those workload Argo
+  apps are created by **Terra** (the marketplace) from plugins/sources -- Terra's frontend
+  surface is exactly `/plugins`, `/plugins/bundles`, `/sources`. We deleted Terra, so the
+  in-dashboard create/launch flow cannot work without re-adding Terra + wiring it to Argo.
+- **Decision: stay lean.** We don't need the Juno marketplace to run VDI. The Helios image
+  runs a full XFCE + Selkies WebRTC desktop by itself; we template it directly via GitOps
+  and expose it WARP-only, the same way genesis is exposed. No Terra, no second Argo CD, no
+  Titan in the workstation path.
+
+## Lean Helios workstations (`templates/workstations/*`)
+
+**Helios** is Juno's containerized workstation (`junoinnovations/helios` on Docker Hub;
+Selkies WebRTC HTML5 desktop, XFCE, `NVIDIA_DRIVER_CAPABILITIES=all`, its own nginx serving
+HTTP on :3000). It was **not** in Zot -- only genesis/rhea/titan were -- so a workstation
+could never have pulled. We mirror `helios:testing-noble` (Ubuntu 24.04 Noble, matches the
+L40 nodes' OS) with the same crane runbook as the platform images (add the line:
+`crane copy docker.io/junoinnovations/helios:testing-noble localhost:5000/junoinnovations/helios:testing-noble --insecure`).
+
+Each entry in `workstations:` (values) renders:
+
+- a **Deployment** `helios-<name>`: the Helios container (env `USER`/`UID`/`GID` -- Helios's
+  `init-user` creates the desktop user; **UID must be free**, 1000 is taken in the image, so
+  dev uses 1200) + an nginx **TLS sidecar** (`:443` -> `127.0.0.1:3000`, websocket Upgrade
+  for Selkies signaling), + a `/dev/shm` `emptyDir` (WebRTC/Chromium need shared memory);
+- a **Service** `helios-<name>` labeled `internal-cks.conductor.technology/warp: "true"` +
+  `warp-hostname: <hostname>` so the central reconciler routes `https://<hostname>` -> the
+  Service ClusterIP `:443` (identical mechanism to genesis);
+- a cert-manager **Certificate** `helios-<name>-tls` for the hostname from the shared
+  `letsencrypt-dns01-prod` DNS-01 issuer.
+
+Reuses `image_pull_secret`, `proxy.image`, and `tls.certificate.issuerRef`. Ingress is
+already allowed: the `genesis` CiliumNetworkPolicy selects the whole namespace
+(`endpointSelector: {}`, `ingress fromEntities: cluster`), so workstation pods on :443 are
+reachable from the WARP tunnel with no extra netpol. Dev ships one workstation,
+`vdi.dev.conductor.technology` (`gpu:false`).
 
 ## Runbook: how the images were mirrored + `zot-pull` created
 
@@ -178,95 +210,6 @@ kubectl -n internal-status-dev get secret zot-pull -o jsonpath='{.data.\.dockerc
 > from an inline manifest via `kubectl apply -f -`), but the mechanics are identical to
 > the bash above.
 
-## Runbook: namespace-parametrized genesis image (`v6.0.0-ns4`)
-
-### Why upstream `v6.0.0` can't be used as-is
-
-Upstream ships the Genesis **backend** as a PyInstaller-frozen onefile binary
-(`/src.app`) with **no public source**. Two things break a non-`argocd` tenant:
-
-1. **Hardcoded namespace.** `backend/workloads/service.py` (`Config.schemas`,
-   `templates`, `_create/_update/_delete_workload_template`) passes a literal
-   `namespace="argocd"` to the Kubernetes API for its schema-cache configmaps and
-   workload-template CRs. Upstream's Makefile installs Genesis *into* a namespace
-   named `argocd`, so the literal is never a problem for them. For us it caused a
-   crash loop: `configmaps is forbidden ... in the namespace "argocd"`. It is **not**
-   env-configurable (`GENESIS_NAMESPACE` only affects other components).
-2. **Frontend binds to `$HOSTNAME`.** The Next.js standalone `server.js` binds to
-   `process.env.HOSTNAME`, which Kubernetes sets to the pod name (-> pod IP). That
-   leaves nothing on loopback, but our nginx TLS sidecar proxies to `127.0.0.1:3000`
-   -> `502 Bad Gateway`. (Upstream fronts the pod with an Ingress to the pod IP, so
-   they never hit this.)
-
-### The fix (no decompilation, no bytecode surgery)
-
-Run the backend **un-frozen** under stock CPython 3.12 (musl) and inject a tiny
-runtime shim; copy the frontend verbatim and bind it to `0.0.0.0`.
-
-- `ns_patch.py` -- wraps `ApiClient.call_api` on **both** the sync `kubernetes` and
-  async `kubernetes_asyncio` clients. Any namespaced call whose `namespace == "argocd"`
-  is redirected to the platform namespace, resolved from `$GENESIS_PLATFORM_NAMESPACE`
-  -> `$GENESIS_NAMESPACE` -> the pod's service-account namespace -> `"argocd"`
-  (unchanged fallback). Only the exact value `"argocd"` is rewritten, so
-  per-user/project namespaces are untouched. This covers all five call sites at once.
-- `run_backend.py` -- replacement entry point: puts the bundle on `sys.path`, imports
-  `ns_patch` (applying it) **before** `from backend import app`, then runs the same
-  `uvicorn.run(app, host="0.0.0.0", workers=1)` the frozen `__main__` did.
-- `launch-prod.sh` -- runs the unchanged `node server.js` with `HOSTNAME=0.0.0.0`
-  and our `python3.12 run_backend.py`.
-
-Because the backend reads some data files by **absolute** build-time path
-(`/app/src/static` swagger theme, `/app/src/backend/header/juno-ascii.txt`, ...),
-the whole upstream `/app/src` tree is copied in for those assets. The `.py` there is
-**not** on `sys.path` (imports resolve to the un-frozen bundle at `/app`).
-
-`GENESIS_NAMESPACE` is already wired to `{{ .Release.Namespace }}` in
-`genesis.deployment.yaml`, so the shim needs no extra config -- the same image works
-in any namespace (dev/prod).
-
-### Reproduce (Windows workstation; bash equivalents are obvious)
-
-```powershell
-# 0. tools: Docker Desktop, crane. Both base images are Alpine 3.24.1, so the
-#    extracted musl CPython-3.12 .so and the copied Node binary are ABI-compatible.
-
-# 1. Extract the frozen backend from the upstream image.
-docker pull junoinnovations/genesis:v6.0.0
-docker create --name g junoinnovations/genesis:v6.0.0
-docker cp g:/src.app ./src.app; docker cp g:/prod/launch-prod.sh ./; docker rm g
-docker run --rm -v "${PWD}:/work" -w /work python:3.12 sh -c `
-  "pip install -q pyinstxtractor-ng && python -m pyinstxtractor_ng src.app"
-
-# 2. Merge the split layout into one importable tree: pyinstxtractor puts pure-python
-#    .pyc under PYZ.pyz_extracted/ and the .so in top-level package dirs.
-docker run --rm -v "${PWD}:/work" python:3.12-alpine sh -c `
-  "cp -r /work/src.app_extracted /work/app && `
-   cp -r /work/src.app_extracted/PYZ.pyz_extracted/* /work/app/ && `
-   rm -rf /work/app/PYZ.pyz_extracted"
-
-# 3. Add ns_patch.py, run_backend.py, launch-prod.sh, Dockerfile (in this folder),
-#    then build. --provenance=false keeps it a single pushable image.
-docker buildx build --provenance=false --sbom=false --load -t genesis-lean:v6.0.0-ns4 .
-
-# 4. Push to the Zot backend (same port-forward + robot-pusher as the mirror runbook).
-kubectl -n zot-dev port-forward svc/zot 5000:5000   # leave running
-$pw = (kubectl -n image-builds-dev get secret zot-push -o jsonpath='{.data.\.dockerconfigjson}' `
-  | %{ [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) } | ConvertFrom-Json `
-  ).auths.'zot.dev.conductor.technology'.password
-crane auth login localhost:5000 -u robot-pusher -p $pw --insecure
-docker save genesis-lean:v6.0.0-ns4 -o g.tar
-crane push g.tar localhost:5000/junoinnovations/genesis:v6.0.0-ns4 --insecure
-crane auth logout localhost:5000; Remove-Item g.tar
-```
-
-Then bump `image.tag` in `values-dev.yaml` and let Argo sync.
-
-The build inputs (`Dockerfile`, `ns_patch.py`, `run_backend.py`, `launch-prod.sh`,
-`.dockerignore`) are committed under **`image/`** in this repo. They are the whole
-source of truth for the rebuild; the large extracted bundle (`app/`, `src.app`,
-`src.app_extracted`) is regenerated by steps 1-2 above and is intentionally **not**
-committed. Copy `image/*` next to the generated `app/` to build.
-
 ## Repoint diff (PR #77)
 
 ```yaml
@@ -281,181 +224,6 @@ genesis:
     valueFiles:
       - values-dev.yaml
 ```
-
-## Runbook: sign-in + authorization
-
-Genesis has two layers: **authentication** (NextAuth -- who you are) and
-**authorization** (Rhea/cedar -- what you may do). Miss either and the UI shows an
-empty sign-in page ("nada") or "You do not have the necessary permissions".
-
-**1. Authentication -- enable a provider.** NextAuth only registers providers whose
-env vars are set; with none, `/api/auth/providers` is `{}` and the sign-in page is
-empty. Supported: `basic_auth` (`BASIC_AUTH_EMAIL`/`BASIC_AUTH_PASSWORD`, plus
-`_2`,`_3`,... for more logins), `google` (`GOOGLE_CLIENT_ID/SECRET`), `cognito`
-(`COGNITO_CLIENT_ID/SECRET/ISSUER`). The credentials provider posts one `formData`
-field = JSON `{"input":"<email>","password":"<pw>"}`.
-
-We use `basic_auth`, wired via `values-dev.yaml -> basicAuth` (toggle in `values.yaml`).
-The password is **not** in git -- it lives in the `genesis-basic-auth` Secret
-(key `password`), created out of band with kubectl create secret generic.
-
-**2. Authorization -- give the sign-in identity a backing admin User.**
-`files/rhea/user-policies.cedar` grants `principal in Group::"admin"` full access.
-The critical, non-obvious detail: **Rhea keys the User by `metadata.name`, and derives
-that name from the email _local-part_ (before `@`) -- NOT from `spec.email`.** So a
-login of `admin@conductor.technology` is looked up as `User/admin`; if no User is named
-`admin`, rhea logs `could not find user: admin` and **every** genesis/titan call the UI
-makes fails with `Internal <service> Error` (surfaced as the "Error Details" panel).
-(This is why an earlier `User/conductor-admin` with the right `spec.email` still failed
--- the *name* did not match the local-part.)
-
-**The durable, GitOps way to create that User is Titan's owner.** At startup Titan
-reconciles a `User` named `ORION_OWNER` (email `ORION_EMAIL`, uid `ORION_OWNER_UID`) and
-adds it to the `admin` Group -- exactly how `jlehrman` exists. So we set, in
-`values-dev.yaml`:
-
-```yaml
-titan:
-  owner: admin                     # == local-part(basicAuth.email); becomes User/admin
-  email: admin@conductor.technology
-  uid: "1000"
-basicAuth:
-  email: admin@conductor.technology
-```
-
-`titan.owner` **must** equal `local-part(basicAuth.email)`. With this in git a fresh
-deploy self-heals the admin User + group membership; no imperative kubectl. (Verified:
-setting `ORION_OWNER=<name>` makes Titan create `User/<name>` via its OpenAPI client and
-append it to `Group/admin.spec.members`.)
-
-> Rhea caches users/groups at pod start. Titan writes the owner User on its own startup,
-> but if you create/rename users out of band you must **restart the genesis pod**
-> (`kubectl -n genesis-dev delete pod -l app=genesis`) so rhea reloads its entity cache.
-> Additional users are normally managed from the Genesis UI once an admin can log in.
-
-## Gotchas & lessons learned
-
-Hard-won, non-obvious things from bringing this up. Read before touching the image,
-auth, or RBAC.
-
-**The Genesis backend is a closed PyInstaller binary.** No public source; the
-`argocd` namespace and other behavior are baked in. Mirroring the upstream image with
-crane does NOT give you editable source -- you have to extract the frozen bundle and
-run it un-frozen (see the image runbook). `GENESIS_NAMESPACE` does not affect the
-schema-cache lookup; only the `ns_patch.py` shim does.
-
-**Alpine 3.24.1, but `apk add python3` = Python 3.14, not 3.12.** The genesis image
-and `python:3.12-alpine` are both Alpine 3.24.1, yet the distro's `python3` package is
-3.14 -- incompatible with the extracted musl CPython-3.12 `.so` (you get
-`bad magic number`). Only `python:3.12-alpine` (Python built from source in
-`/usr/local`) gives a matching 3.12 interpreter. Copy Node from the genesis image into
-`python:3.12-alpine`, not the other way around.
-
-**PyInstaller extraction layout is split.** `pyinstxtractor-ng` puts pure-Python
-`.pyc` under `PYZ.pyz_extracted/` and compiled `.so` in top-level package dirs. You
-must merge them into one tree or imports like `pydantic_core._pydantic_core` fail. The
-backend also reads data files by absolute build-time path (`/app/src/static`,
-`/app/src/backend/header/juno-ascii.txt`) that are NOT in the PyInstaller archive --
-upstream ships them on the filesystem, so copy the whole `/app/src` from the image.
-
-**Docker Desktop on Windows can't reach a host port-forward as `localhost`.** The
-daemon runs in a VM, so `docker login/push localhost:5000` (a kubectl port-forward on
-the host) times out. Use `crane` on the host (it hits `127.0.0.1:5000` directly):
-`docker save img -o t.tar; crane push t.tar <ref> --insecure`. Build with
-`--provenance=false --sbom=false` so you push a single image, not an attestation index.
-
-**Next.js standalone binds to `$HOSTNAME`.** Kubernetes sets `HOSTNAME` to the pod
-name (-> pod IP), so the frontend listens only there and the in-pod nginx TLS sidecar
-(`proxy_pass 127.0.0.1:3000`) returns `502`. Launch node with `HOSTNAME=0.0.0.0`.
-Upstream never hit this because it fronts the pod with an Ingress to the pod IP.
-
-**NextAuth quirks.** `/api/auth/*` 308-redirects to add a trailing slash (the app sets
-`trailingSlash: true`); a POST that does not follow 308 silently no-ops. The
-`basic_auth` credentials provider expects a SINGLE `formData` field whose value is JSON
-`{"input":"<email>","password":"<pw>"}` -- not separate `email`/`password` fields.
-Providers are opt-in: with no provider env set, `/api/auth/providers` is `{}` and the
-sign-in page is empty.
-
-**Rhea / cedar authorization.** Cedar entity types are namespaced by the platform
-namespace (`argocd::Service::"genesis"` in `system-policies.cedar`) -- another place the
-"argocd" assumption surfaces, and -- contrary to what this note used to say -- it DOES block service-to-service calls once traffic reaches a service (see the two gotchas below). Admin is
-`Group::"admin"` membership (`permit(principal in Group::"admin", ...)`); `*/home/` is
-wide-open in policy. Rhea caches users/groups at pod start -- restart the genesis pod
-after any out-of-band User/Group change.
-
-**Frontend service namespace was also hardcoded `argocd` -- the real cause of the "Error
-Details" panel that persisted after the User-lookup fix.** Separate from the rhea
-User-lookup above: the Node frontend builds its in-cluster service URLs as
-`<svc>.<namespace>.svc.cluster.local` and bakes `namespace:"argocd"` into its service
-config (`/prod/.next/server/chunks/1909.js` and `4734.js`). In `genesis-dev`,
-`titan.argocd.svc` / `genesis.argocd.svc` do not resolve (`wget: bad address`), so every
-server action failed with `status_code: undefined` / `Internal <service> Error` and the
-panel stayed at 9 -- the calls never left the pod, so titan/rhea logs showed nothing. The
-frontend does **not** read `GENESIS_NAMESPACE`, so we rewrite the baked string at container
-start: the genesis container entrypoint is wrapped (chart `command`/`args`) to run
-`sed -i 's/namespace:"argocd"/namespace:"$GENESIS_NAMESPACE"/g'` over the built JS, then
-`exec sh /prod/launch-prod.sh`. This is the frontend analog of the backend `ns_patch` shim;
-no image rebuild (commit `98a121b`). After it, calls reach `titan.genesis-dev.svc` (401/403
-instead of a DNS failure) -- which then exposed the rhea 403 below.
-
-> **RESOLVED: titan rhea 403 was the shipped `argocd::Service` resource scope, not identity.**
-> With the frontend reaching titan, its rhea sidecar returned **403 `RHEA_AUTHZ:
-> Authorization denied`** for `GET /titan/users` and `/titan/groups` (login + home still
-> worked via the `*/home/` wide-open rule). The earlier suspicion that the *principal* was
-> unestablished was a **false lead: Argo self-heal was silently reverting the live policy
-> mid-test** -- every `orion-systempolicy`/`orion-userpolicy` edit (including the
-> "unconditional permit" probe) was rolled back within a sync cycle, so the 403 never
-> reflected the policy under test. After pausing `automated.selfHeal` on the `genesis` app
-> **and** its parent app-of-apps (`k8s-services-internal-dev-us-east-04a`), the edits stuck
-> and the picture was unambiguous:
->
-> - `resource == argocd::Service::"titan"` (shipped)                     -> **403**
-> - `resource == Service::"titan"` (bare)                                -> **403**
-> - no resource constraint, gated on `principal.serviceAccountName`      -> **200**
->
-> So the principal IS established correctly (rhea sets `serviceAccountName` from the caller's
-> projected SA token). The only miss is the resource entity: `NAMESPACED=true` makes rhea
-> build it as `<namespace>::Service::"titan"` = `genesis-dev::Service::"titan"`, which never
-> equals the shipped `argocd::Service::"titan"` (upstream's install-into-`argocd` convention)
-> and cannot be written back into policy either -- `genesis-dev` has a hyphen, an illegal
-> cedar identifier (`parser error ... "dev": want ::`). **Fix:** gate `system-policies.cedar`
-> on the trusted `serviceAccountName` set (the same accounts the per-service rules
-> enumerated) and drop the unexpressible `resource ==` scope. Verified: `/titan/users` +
-> `/titan/groups` return 200 and the User/Group UI renders. This keeps `NAMESPACED=true`, so
-> user/group (`Group::"admin"`) auth is unchanged. Diagnose from `kubectl -n genesis-dev logs
-> deploy/titan -c titan` (`RHEA_AUTHZ` lines).
->
-> **Operational note:** live policy/env experiments are meaningless while Argo self-heal is
-> on -- it reverts `kubectl` drift within a sync cycle. Pause `automated.selfHeal` on the app
-> *and every parent app-of-apps* first, then restore it when done.
-
-**Rhea keys Users by `metadata.name` (the email local-part), NOT `spec.email` -- this is
-the trap behind the "Error Details" panel.** A login of `admin@conductor.technology` is
-resolved to `User/admin`. If the backing User is named anything else (we first made
-`User/conductor-admin`, correct `spec.email`, wrong name), the genesis pod's own rhea
-sidecar logs `could not find user: admin` and rejects **every** authorized call the UI
-makes -- surfacing as `Internal titan Error` / `Internal genesis Error` with
-`status_code: undefined` for users, groups, projects, and nodes (all of them, not just
-one service). Diagnose from `kubectl -n genesis-dev logs deploy/genesis -c rhea`. The
-durable fix is declarative, not a hand-made User: set `titan.owner` =
-`local-part(basicAuth.email)`, because Titan reconciles `User/<owner>` and adds it to
-`Group/admin` at startup (verified: `ORION_OWNER=btest9` made Titan create `User/btest9`
-via its OpenAPI client and append it to `admin`). Argo self-heals any live `kubectl set
-env`/annotation, so this only sticks from git.
-
-**RBAC: Orion is not namespaced.** Its CRDs (groups/users/workstations/workstation-logs)
-are `scope: Cluster`, and Genesis makes cluster-wide read calls at startup
-(services across all namespaces, nodes, storageclasses, persistentvolumes,
-customresourcedefinitions). Namespaced Roles cannot cover these, so a narrow read-only
-ClusterRole is required -- but full cluster-admin is not.
-
-**Licensing.** With no `juno-license` secret the backend logs `402: Failed to fetch
-license token` and drops to **community mode** (2 workstations). That is enough to test
-VDI; supply a real license for more.
-
-**Operational.** The local working tree drifted to a stale version of tracked files at
-one point while the committed branch and the live cluster were correct. Trust
-`git show HEAD:<file>` and `kubectl get` over a local file read when they disagree.
 
 ## For prod later
 

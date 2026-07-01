@@ -1,0 +1,19 @@
+{{- range .Values.workstations }}
+{{- $tlsSecret := printf "helios-%s-tls" .name }}
+{{- if and .tls .tls.secretName }}{{ $tlsSecret = .tls.secretName }}{{- end }}
+# Per-workstation TLS leaf for the WARP hostname, from the shared DNS-01 issuer
+# (same issuer genesis uses). Consumed by the workstation's nginx TLS sidecar.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: helios-{{ .name }}-tls
+  namespace: {{ $.Release.Namespace }}
+spec:
+  secretName: {{ $tlsSecret }}
+  dnsNames:
+    - {{ required "each workstation needs a hostname" .hostname | quote }}
+  issuerRef:
+    name: {{ $.Values.tls.certificate.issuerRef.name }}
+    kind: {{ $.Values.tls.certificate.issuerRef.kind }}
+---
+{{- end }}

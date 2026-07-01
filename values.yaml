@@ -84,3 +84,24 @@ tls:
 
 proxy:
   image: nginx:1.27-alpine
+
+# Helios Linux-VDI workstations (lean, GitOps-managed -- no Titan/Terra/marketplace).
+# Each entry renders a Deployment (helios desktop + nginx TLS sidecar), a WARP-labeled
+# Service, and a cert-manager Certificate. Reuses image_pull_secret, proxy.image, and
+# tls.certificate.issuerRef above. Empty by default so upstream behavior is unchanged.
+#
+# Entry shape:
+#   - name: linux-desktop                 # DNS-safe suffix; resources are helios-<name>
+#     hostname: vdi.dev.conductor.technology
+#     image: { registry, repository, tag }
+#     user: helios                        # desktop user; UID/GID must be free in the image
+#     uid: "1200"
+#     gid: "1200"
+#     gpu: false                          # true adds nvidia.com/gpu: 1 to limits
+#     resources:
+#       requests: { cpu, memory }
+#       limits:   { cpu, memory }
+#     password: { secret: <name>, key: password }   # optional OS user password
+#     env: [ { name, value } ]            # optional extra Helios env
+#     tls: { secretName: <name> }         # optional; defaults to helios-<name>-tls
+workstations: []

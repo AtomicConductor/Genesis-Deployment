@@ -1,0 +1,24 @@
+{{- range .Values.workstations }}
+# WARP-only exposure for workstation "{{ .name }}". The central warp-route-reconciler
+# (k8s-services-internal) watches this label, reads the live ClusterIP, and wires the
+# Cloudflare DNS override + teamnet route + split-tunnel include for the hostname.
+apiVersion: v1
+kind: Service
+metadata:
+  name: helios-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: helios-{{ .name }}
+    internal-cks.conductor.technology/warp: "true"
+  annotations:
+    internal-cks.conductor.technology/warp-hostname: {{ .hostname | quote }}
+spec:
+  selector:
+    app: helios-{{ .name }}
+  ports:
+    - port: 443
+      targetPort: 443
+      protocol: TCP
+      name: https
+---
+{{- end }}

@@ -1,0 +1,43 @@
+{{- if .Values.workstations }}
+# Shared TLS-terminating nginx config for Helios VDI workstations. Helios serves
+# the Selkies WebRTC desktop as plain HTTP on :3000 (its own in-image nginx); this
+# sidecar adds TLS on :443 with a per-workstation cert-manager leaf, so the central
+# warp-route-reconciler can route https://<hostname> -> Service ClusterIP:443. The
+# websocket Upgrade map is required for the Selkies signaling channel.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: helios-workstation-proxy
+  namespace: {{ .Release.Namespace }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    events { worker_connections 1024; }
+    http {
+      map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+      upstream helios_ui { server 127.0.0.1:3000; }
+
+      server {
+        listen 443 ssl;
+        server_name _;
+
+        ssl_certificate     /tls/tls.crt;
+        ssl_certificate_key /tls/tls.key;
+
+        client_max_body_size 0;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+
+        location / {
+          proxy_pass http://helios_ui;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+        }
+      }
+    }
+{{- end }}
