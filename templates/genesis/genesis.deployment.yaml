@@ -53,6 +53,13 @@ spec:
               value: "Milky Way"
             - name: ICON
               value: "/universe/assets/galaxy-1.webp"
+            # Platform namespace Genesis uses for its own resources (schema cache
+            # configmaps, tokens, etc.). Upstream defaults this to "argocd" because
+            # their Makefile installs Genesis INTO a namespace named argocd. We run
+            # Genesis in its own release namespace, so point it there instead of the
+            # hardcoded default. Mirrors Orion-Deployment's genesis_namespace value.
+            - name: GENESIS_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
           {{- if .Values.image_pull_secret }}
             - name: IMAGE_PULL_SECRET
               value: {{ .Values.image_pull_secret }}
