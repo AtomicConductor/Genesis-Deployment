@@ -24,3 +24,8 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]
     verbs: ["get", "list", "watch"]
+  # Genesis lists cluster-scoped storage classes at startup to offer workstation
+  # storage options (backend/storage/service.py refresh_sc_cache) -- read-only.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
