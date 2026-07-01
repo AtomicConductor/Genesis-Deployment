@@ -43,6 +43,22 @@ spec:
         - name: genesis
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.pull_policy }}
+          # The Node frontend has the platform namespace baked in as namespace:"argocd"
+          # for its in-cluster service URLs (<svc>.<ns>.svc.cluster.local). Upstream
+          # installs into a namespace literally named "argocd"; we run in our own
+          # namespace, so titan.argocd.svc / genesis.argocd.svc / terra.argocd.svc do
+          # NOT resolve and every server-side call fails with "Internal <service> Error"
+          # (status_code undefined = DNS failure, surfaced as the UI "Error Details"
+          # panel). The frontend does not read GENESIS_NAMESPACE, so rewrite the baked
+          # string to the release namespace at startup, then hand off to the image's
+          # launch script. This is the frontend analog of the backend ns_patch shim.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              for f in $(grep -rl 'namespace:"argocd"' /prod/.next /prod/server.js 2>/dev/null); do
+                sed -i "s/namespace:\"argocd\"/namespace:\"${GENESIS_NAMESPACE}\"/g" "$f"
+              done
+              exec sh /prod/launch-prod.sh
           env:
             - name: AUTH_SECRET
               valueFrom:
