@@ -19,13 +19,18 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Genesis/Titan discover workloads cluster-wide at startup -- read-only.
   - apiGroups: [""]
-    resources: ["services", "pods", "namespaces", "endpoints", "nodes", "persistentvolumeclaims"]
+    resources: ["services", "pods", "namespaces", "endpoints", "nodes", "persistentvolumeclaims", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]
     verbs: ["get", "list", "watch"]
-  # Genesis lists cluster-scoped storage classes at startup to offer workstation
-  # storage options (backend/storage/service.py refresh_sc_cache) -- read-only.
+  # Genesis builds cluster-scoped storage caches at startup (backend/storage:
+  # storage classes + persistent volumes) -- read-only.
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  # Genesis probes for optional CRDs (e.g. kubevirts.kubevirt.io for VM workstations)
+  # at startup -- read-only get/list on CRD definitions.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "watch"]
