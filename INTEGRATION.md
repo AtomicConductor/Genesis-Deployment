@@ -1,4 +1,4 @@
-# Orion / Genesis -- Conductor lean-VDI integration
+﻿# Orion / Genesis -- Conductor lean-VDI integration
 
 How we run **only** Orion's Linux-VDI workstation engine as a tenant on the existing
 Conductor CKS cluster (`dev-us-east-04a`), WARP-private, with **no** second Argo CD,
@@ -272,6 +272,38 @@ genesis:
     valueFiles:
       - values-dev.yaml
 ```
+
+## Runbook: sign-in + authorization
+
+Genesis has two layers: **authentication** (NextAuth -- who you are) and
+**authorization** (Rhea/cedar -- what you may do). Miss either and the UI shows an
+empty sign-in page ("nada") or "You do not have the necessary permissions".
+
+**1. Authentication -- enable a provider.** NextAuth only registers providers whose
+env vars are set; with none, `/api/auth/providers` is `{}` and the sign-in page is
+empty. Supported: `basic_auth` (`BASIC_AUTH_EMAIL`/`BASIC_AUTH_PASSWORD`, plus
+`_2`,`_3`,... for more logins), `google` (`GOOGLE_CLIENT_ID/SECRET`), `cognito`
+(`COGNITO_CLIENT_ID/SECRET/ISSUER`). The credentials provider posts one `formData`
+field = JSON `{"input":"<email>","password":"<pw>"}`.
+
+We use `basic_auth`, wired via `values-dev.yaml -> basicAuth` (toggle in `values.yaml`).
+The password is **not** in git -- it lives in the `genesis-basic-auth` Secret
+(key `password`), created out of band with kubectl create secret generic.
+
+**2. Authorization -- map the identity to an admin.** `files/rhea/user-policies.cedar`
+grants `principal in Group::"admin"` full access. Rhea maps the signed-in email to a
+`User.juno-innovations.com` by `spec.email`, then checks its `Group` membership. A
+fresh tenant only has the CoreWeave owner `jlehrman` (`jlehrman@coreweave.com`) in
+`admin`, so any other login is denied. Create a matching User
+(`kind: User`, `apiVersion: juno-innovations.com/v2`, `spec.email` = the login email,
+`spec.active: true`, a unique `spec.uid`) and add its `metadata.name` to the `admin`
+Group's `spec.members`.
+
+> Rhea caches users/groups at pod start, so after creating users out-of-band you must
+> **restart the genesis pod** (`kubectl -n genesis-dev delete pod -l app=genesis`) for
+> the change to take effect. Normally users/groups are managed from the Genesis UI once
+> an admin can log in. These CRs are `scope: Cluster` and were created imperatively (not
+> in git); move them into GitOps if they must survive a cluster rebuild.
 
 ## For prod later
 
