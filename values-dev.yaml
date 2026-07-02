@@ -81,22 +81,10 @@ rhea:
   image:
     registry: zot.dev.conductor.technology/junoinnovations
 
-# Helios Linux-VDI workstations. Exposed WARP-only at their own hostnames, same as
-# genesis. The image is Juno's Helios (Selkies WebRTC desktop) mirrored into Zot from
-# junoinnovations/helios:testing-noble (Ubuntu 24.04 Noble, matches the L40 nodes).
-# gpu:false for now -- the L40 nodes are currently saturated by CoreWeave HPC
-# node-health-check pods; flip to true once a GPU frees to schedule on nvidia.com/gpu.
-workstations:
-  - name: linux-desktop
-    hostname: vdi.dev.conductor.technology
-    image:
-      registry: zot.dev.conductor.technology/junoinnovations
-      repository: helios
-      tag: testing-noble
-    user: helios
-    uid: "1200"
-    gid: "1200"
-    gpu: false
-    resources:
-      requests: { cpu: "1", memory: "2Gi" }
-      limits:   { cpu: "4", memory: "6Gi" }
+# Helios Linux-VDI workstations: DECOMMISSIONED. This was the throwaway experiment
+# that mirrored Juno's Helios image; it is superseded by the first-party
+# AtomicConductor/conductor-vdi app (its own repo + Argo app), which owns
+# vdi.dev.conductor.technology now. Leaving a workstation here caused two Services
+# to claim the same WARP hostname, flapping the Gateway DNS override. Empty list =>
+# Argo prunes the old helios-linux-desktop Service/Deployment/Certificate.
+workstations: []
